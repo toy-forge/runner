@@ -1,0 +1,51 @@
+{
+  "title": "_Global_",
+  "read_only": true,
+  "bindings": [
+    {
+      "title": "Defer insertion of matching } at end of line",
+      "key": "",
+      "compound": "{\"{\": [\"testSelectedText:\", \"\", \"testSucceedingText:\", \"\\n\", \"testActiveSyntax:\", \"source\", \"negate:\", [\"testHasMultipleSelections\"], \"insertText:\", \"{\", \"saveSelectionWithName:\", \"braceAtEndOfLine\"], \"\\r\": [\"testSelectionIsEqualToSelectionWithName:\", \"braceAtEndOfLine\", \"testDocumentNotEditedSinceSelectionWithName:\", \"braceAtEndOfLine\", \"insertText:\", \"}\", \"moveLeftAndModifySelection\", \"showFindIndicator\", \"moveLeft\", \"insertNewline\"], \"}\": [\"testSelectionWithNameExists:\", \"braceAtEndOfLine\", \"insertText:\", \"}\", \"saveSelectionWithName:\", \"end\", \"moveLeftAndModifySelection\", \"balanceDelimiters\", \"collapseSelectionToStart\", \"testSucceedingText:\", \"{\", \"moveRight\", \"testSelectionIsEqualToSelectionWithName:\", \"braceAtEndOfLine\", \"discardSelectionWithName:\", \"braceAtEndOfLine\", \"selectToSelectionWithName:\", \"end\", \"autoIndent\", \"restoreSelectionWithName:\", \"end\"]}"
+    },
+    {
+      "title": "HTML/XML: Close recently opened tag",
+      "key": "",
+      "compound": "[\"testActiveSyntax:\", \"text.html\", \"findScopeForwardsAnchored:\", \"entity.name.tag\", \"copyWithName:\", \"tag\", \"insertText:\", \">\", \"insertText:\", \"</\", \"pasteWithName:\", \"tag\", \"insertText:\", \">\"]"
+    },
+    {
+      "title": "HTML/XML: Close recently opened tag (>)",
+      "key": ">",
+      "compound": "[\"testActiveSyntax:\", \"text.html\", \"includeCompoundCommand:\", \"HTML/XML: Close recently opened tag\"]"
+    },
+    {
+      "title": "HTML/XML: Close tag and auto-indent",
+      "key": "/",
+      "compound": "[\"testActiveSyntax:\", \"text.html\", \"insertText:\", \"/\", \"balanceDelimiters\", \"autoIndent\"]"
+    },
+    {
+      "title": "HTML/XML: Record recently opened tag",
+      "key": "<",
+      "compound": "[\"testActiveSyntax:\", \"text.html\", \"insertText:\", \"<\", \"saveSelectionWithName:\", \"recentlyOpenedTag\"]"
+    },
+    {
+      "title": "JSON: Defer insertion of matching ] at end of line",
+      "key": "",
+      "compound": "{\"[\": [\"testSelectedText:\", \"\", \"testSucceedingText:\", \"\\n\", \"testActiveSyntax:\", \"source.json\", \"negate:\", [\"testHasMultipleSelections\"], \"insertText:\", \"[\", \"saveSelectionWithName:\", \"bracketAtEndOfLine\"], \"\\r\": [\"testSelectionIsEqualToSelectionWithName:\", \"bracketAtEndOfLine\", \"testDocumentNotEditedSinceSelectionWithName:\", \"bracketAtEndOfLine\", \"insertText:\", \"]\", \"moveLeftAndModifySelection\", \"showFindIndicator\", \"moveLeft\", \"insertNewline\"], \"]\": [\"testSelectionWithNameExists:\", \"bracketAtEndOfLine\", \"insertText:\", \"]\", \"saveSelectionWithName:\", \"end\", \"moveLeftAndModifySelection\", \"balanceDelimiters\", \"collapseSelectionToStart\", \"testSucceedingText:\", \"[\", \"moveRight\", \"testSelectionIsEqualToSelectionWithName:\", \"bracketAtEndOfLine\", \"discardSelectionWithName:\", \"bracketAtEndOfLine\", \"selectToSelectionWithName:\", \"end\", \"autoIndent\", \"restoreSelectionWithName:\", \"end\"]}"
+    },
+    {
+      "title": "Markdown",
+      "key": "",
+      "compound": "{\"=\": [\"testActiveSyntax:\", \"text.html.markdown\", \"insertText:\", \"=\"], \"-\": [\"testActiveSyntax:\", \"text.html.markdown\", \"insertText:\", \"-\"], \"*\": [\"testActiveSyntax:\", \"text.html.markdown\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"surroundSelectionWithString:endString:\", \"*\", \"*\"], [\"insertText:\", \"**\", \"moveLeft\"]]], \"_\": [\"testActiveSyntax:\", \"text.html.markdown\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"surroundSelectionWithString:endString:\", \"_\", \"_\"], [\"insertText:\", \"__\", \"moveLeft\"]]], \"`\": [\"testActiveSyntax:\", \"text.html.markdown\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"surroundSelectionWithString:endString:\", \"`\", \"`\"], [\"insertText:\", \"``\", \"moveLeft\"]]], \"\": [\"testActiveSyntax:\", \"text.html.markdown\", \"testSelectedText:\", \"**\", \"insertText:\", \"\"]}"
+    },
+    {
+      "title": "Objective-C: Insert missing [",
+      "key": "]",
+      "compound": "[\"testActiveSyntax:\", \"source.objc\", \"testSucceedingText:\", \"]\", \"balanceDelimiters\", \"noop\"]"
+    },
+    {
+      "title": "Shell: [  ]",
+      "key": "",
+      "compound": "{\"[\": [\"testActiveSyntax:\", \"source.shell -variable\", \"insertText:\", \"[  ]\", \"moveLeft\", \"moveLeft\"], \"\": [\"testActiveSyntax:\", \"source.shell -variable\", \"testSelectedText:\", \"[  ]\", \"insertText:\", \"\"]}"
+    }
+  ]
+}

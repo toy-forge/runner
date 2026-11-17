@@ -1,0 +1,71 @@
+id = "csharp-dotnet"
+uuid = "E141E12A-2879-4253-B8B5-5FB47C3DBC8F"
+name = "C# (.NET)"
+extensions = ["cs"]
+default_for = ["cs"]
+modelines = ["csharp", "c#", "cs"]
+content_patterns = [
+  '@2 (?m)^\s*using\s+System(\.\w+)*\s*;',
+  '@2 \bConsole\.(WriteLine|ReadLine|Write)\(',
+  '(?m)^\s*namespace\s+[\w.]+',
+  '\bstatic\s+(void|int|async\s+Task)\s+Main\s*\(',
+  '(?m)^\s*(public|internal|private)\s+(static\s+)?(class|struct|record|interface)\s+\w+',
+]
+editor_syntax = "C#"
+grammar = "source.cs"
+requires_external_components = true
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = "dotnet run --no-restore"
+
+[run.env]
+path_append = ["/usr/local/share/dotnet", "/opt/homebrew/bin", "$home/.dotnet"]
+vars = { DOTNET_NOLOGO = "1", DOTNET_CLI_TELEMETRY_OPTOUT = "1" }
+
+[run.compile]
+kind = "steps"
+
+[[run.compile.steps]]
+name = "Build"
+program = "dotnet"
+args = ["build", "$flags"]
+missing_tool = "Could not find .NET. Download it from https://dotnet.microsoft.com/."
+require = [{ condition = { file_exists_up = "*.csproj" }, message = "No .NET project (.csproj) was found in this folder or its parents. Create one first, for example by running \"dotnet new console\" in an empty folder, then open the folder here." }]
+
+[[diagnostics]]
+id = "console-text"
+name = "Console Text"
+kind = "console_text"
+update = { on_run = true }
+output_mode = "regex"
+regex = '^(?<file>[^\s].*?)\((?<line>\d+),(?<column>\d+)\): (((?<error>error)|(?<warning>warning)|(?<note>note|notice)) (?<messageID>\w+\d+): ?)?(?<message>.*)$'
+
+[[diagnostics]]
+id = "syntax"
+name = "C# Syntax"
+kind = "compile_script"
+update = { on_edit = true, on_run = true }
+options = { custom_flags = true, add_to_existing = true, cancel_on_errors = true }
+output_mode = "regex"
+flags = "--no-restore"
+regex = '^(?<file>[^\s].*?)\((?<line>\d+),(?<column>\d+)\): (((?<error>error)|(?<warning>warning)|(?<note>note|notice)) (?<messageID>\w+\d+): ?)?(?<message>.*)$'
+
+[[templates]]
+name = "Main File"
+extension = "cs"
+text = "using System;\n\nclass Untitled\n{\n\tstatic void Main(string[] args)\n\t{\n\t\t<##>\n\t}\n}"
+
+[[templates]]
+name = "Class"
+extension = "cs"
+name_on_creation = true
+text = "using System;\n\nclass ___FILEBASENAME___\n{\n\t<##>\n}\n"
+
+[[docs]]
+name = "Microsoft Learn"
+type = "search"
+url = "https://learn.microsoft.com/en-us/search/?terms={query}&scope=.NET"

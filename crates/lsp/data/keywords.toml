@@ -1,0 +1,393 @@
+# Authored keyword and snippet tables used for server-free completion. One entry per
+# ScratchRunner language id (crates/language); the lists are deliberately small: the language
+# servers (when installed) and words in the document do the heavy lifting.
+
+[[language]]
+id = "applescript"
+extensions = ["applescript", "scpt"]
+extra_word_chars = ""
+keywords = ["on", "end", "tell", "set", "if", "then", "else", "repeat", "return", "property", "to", "of", "in", "try", "with", "error"]
+
+[[language]]
+id = "c"
+extensions = ["c", "h"]
+extra_word_chars = ""
+keywords = ["auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while"]
+
+[[language.snippet]]
+label = "for"
+detail = "for loop"
+insert = "for (int ${1:i} = 0; ${1:i} < ${2:n}; ${1:i}++) {\n\t$0\n}"
+kind = "snippet"
+
+[[language.snippet]]
+label = "main"
+detail = "main function"
+insert = "int main(int argc, char **argv) {\n\t$0\n\treturn 0;\n}"
+kind = "snippet"
+
+[[language]]
+id = "cpp"
+extensions = ["cpp", "cc", "cp", "cxx", "c++", "hh", "hpp", "h++"]
+extra_word_chars = ""
+keywords = ["alignas", "alignof", "auto", "bool", "break", "case", "catch", "class", "const", "constexpr", "continue", "decltype", "default", "delete", "do", "double", "else", "enum", "explicit", "extern", "false", "float", "for", "friend", "if", "inline", "int", "long", "mutable", "namespace", "new", "noexcept", "nullptr", "operator", "private", "protected", "public", "return", "short", "signed", "sizeof", "static", "static_cast", "struct", "switch", "template", "this", "throw", "true", "try", "typedef", "typename", "union", "unsigned", "using", "virtual", "void", "volatile", "while"]
+
+[[language.snippet]]
+label = "for"
+detail = "range-based for loop"
+insert = "for (const auto &${1:item} : ${2:items}) {\n\t$0\n}"
+kind = "snippet"
+
+[[language]]
+id = "csharp-dotnet"
+extensions = ["cs"]
+extra_word_chars = ""
+keywords = ["abstract", "as", "async", "await", "base", "bool", "break", "byte", "case", "catch", "class", "const", "continue", "decimal", "default", "delegate", "do", "double", "else", "enum", "event", "explicit", "extern", "false", "finally", "float", "for", "foreach", "if", "implicit", "in", "int", "interface", "internal", "is", "lock", "long", "namespace", "new", "null", "object", "operator", "out", "override", "params", "private", "protected", "public", "readonly", "ref", "return", "sealed", "short", "sizeof", "static", "string", "struct", "switch", "this", "throw", "true", "try", "typeof", "uint", "ulong", "using", "var", "virtual", "void", "while"]
+
+[[language]]
+id = "csharp-mono"
+extensions = ["cs"]
+extra_word_chars = ""
+keywords = ["abstract", "as", "async", "await", "base", "bool", "break", "byte", "case", "catch", "class", "const", "continue", "decimal", "default", "delegate", "do", "double", "else", "enum", "event", "explicit", "extern", "false", "finally", "float", "for", "foreach", "if", "implicit", "in", "int", "interface", "internal", "is", "lock", "long", "namespace", "new", "null", "object", "operator", "out", "override", "params", "private", "protected", "public", "readonly", "ref", "return", "sealed", "short", "sizeof", "static", "string", "struct", "switch", "this", "throw", "true", "try", "typeof", "uint", "ulong", "using", "var", "virtual", "void", "while"]
+
+[[language]]
+id = "csharp-script"
+extensions = ["csx"]
+extra_word_chars = ""
+keywords = ["var", "new", "if", "else", "for", "foreach", "while", "return", "class", "using", "async", "await", "true", "false", "null", "string", "int", "double", "bool"]
+
+[[language]]
+id = "css"
+extensions = ["css"]
+extra_word_chars = "-"
+keywords = ["color", "background", "background-color", "display", "flex", "grid", "position", "absolute", "relative", "fixed", "margin", "padding", "border", "font", "font-family", "font-size", "font-weight", "width", "height", "align-items", "justify-content", "gap", "overflow", "z-index", "opacity", "transition", "transform"]
+
+[[language.snippet]]
+label = "flex"
+detail = "flex container"
+insert = "display: flex;\nalign-items: ${1:center};\njustify-content: ${2:space-between};\n$0"
+kind = "snippet"
+
+[[language]]
+id = "go"
+extensions = ["go"]
+extra_word_chars = ""
+keywords = ["break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range", "return", "select", "struct", "switch", "type", "var", "nil", "true", "false", "make", "new", "append", "len", "cap", "error"]
+
+[[language.snippet]]
+label = "func"
+detail = "function"
+insert = "func ${1:name}(${2:args}) ${3:error} {\n\t$0\n}"
+kind = "snippet"
+
+[[language.snippet]]
+label = "main"
+detail = "main package"
+insert = "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(${1:\"hello\"})\n\t$0\n}"
+kind = "snippet"
+
+[[language]]
+id = "haskell"
+extensions = ["hs"]
+extra_word_chars = "'"
+keywords = ["case", "class", "data", "default", "deriving", "do", "else", "if", "import", "in", "infix", "instance", "let", "module", "newtype", "of", "then", "type", "where", "forall"]
+
+[[language]]
+id = "html"
+extensions = ["html", "htm", "shtml", "xhtml", "tmpl", "tpl"]
+extra_word_chars = "-"
+keywords = ["html", "head", "body", "div", "span", "p", "a", "img", "ul", "ol", "li", "table", "tr", "td", "th", "section", "header", "footer", "nav", "main", "script", "style", "link", "meta", "form", "input", "button", "label", "select", "option", "textarea"]
+
+[[language.snippet]]
+label = "html5"
+detail = "HTML5 skeleton"
+insert = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n\t<meta charset=\"utf-8\">\n\t<title>${1:Title}</title>\n</head>\n<body>\n\t$0\n</body>\n</html>"
+kind = "snippet"
+
+[[language]]
+id = "java"
+extensions = ["java"]
+extra_word_chars = ""
+keywords = ["abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "if", "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private", "protected", "public", "record", "return", "sealed", "short", "static", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "var", "void", "volatile", "while"]
+
+[[language.snippet]]
+label = "main"
+detail = "main method"
+insert = "public static void main(String[] args) {\n\t$0\n}"
+kind = "snippet"
+
+[[language.snippet]]
+label = "class"
+detail = "class declaration"
+insert = "public class ${1:Name} {\n\t$0\n}"
+kind = "snippet"
+
+[[language]]
+id = "javascript-browser"
+extensions = ["js"]
+extra_word_chars = "$"
+keywords = ["async", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "export", "extends", "false", "finally", "for", "function", "if", "import", "in", "instanceof", "let", "new", "null", "of", "return", "static", "super", "switch", "this", "throw", "true", "try", "typeof", "undefined", "var", "void", "while", "yield"]
+
+[[language.snippet]]
+label = "function"
+detail = "function declaration"
+insert = "function ${1:name}(${2:args}) {\n\t$0\n}"
+kind = "snippet"
+
+[[language]]
+id = "javascript-jquery"
+extensions = ["js"]
+extra_word_chars = "$"
+keywords = ["async", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "export", "extends", "false", "finally", "for", "function", "if", "import", "in", "instanceof", "let", "new", "null", "of", "return", "static", "super", "switch", "this", "throw", "true", "try", "typeof", "undefined", "var", "void", "while", "yield", "jQuery", "$"]
+
+[[language.snippet]]
+label = "ready"
+detail = "jQuery document ready"
+insert = "$(function () {\n\t$0\n});"
+kind = "snippet"
+
+[[language]]
+id = "javascript-node"
+extensions = ["js", "mjs", "cjs"]
+extra_word_chars = "$"
+keywords = ["async", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "export", "extends", "false", "finally", "for", "function", "if", "import", "in", "instanceof", "let", "new", "null", "of", "return", "static", "super", "switch", "this", "throw", "true", "try", "typeof", "undefined", "var", "void", "while", "yield", "require", "module", "exports", "process"]
+
+[[language.snippet]]
+label = "function"
+detail = "function declaration"
+insert = "function ${1:name}(${2:args}) {\n\t$0\n}"
+kind = "snippet"
+
+[[language]]
+id = "json"
+extensions = ["json", "jsonc", "json5", "geojson", "webmanifest"]
+extra_word_chars = ""
+keywords = ["true", "false", "null"]
+
+[[language]]
+id = "kotlin"
+extensions = ["kt", "kts"]
+extra_word_chars = ""
+keywords = ["as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in", "interface", "is", "null", "object", "package", "return", "super", "this", "throw", "true", "try", "typealias", "val", "var", "when", "while"]
+
+[[language.snippet]]
+label = "main"
+detail = "main function"
+insert = "fun main() {\n\t$0\n}"
+kind = "snippet"
+
+[[language]]
+id = "latex"
+extensions = ["tex"]
+extra_word_chars = "@"
+keywords = ["documentclass", "usepackage", "begin", "end", "section", "subsection", "paragraph", "textbf", "textit", "emph", "cite", "ref", "label", "item", "newcommand", "includegraphics", "caption", "tableofcontents"]
+
+[[language.snippet]]
+label = "document"
+detail = "article skeleton"
+insert = "\\documentclass{article}\n\\usepackage[utf8]{inputenc}\n\n\\begin{document}\n$0\n\\end{document}"
+kind = "snippet"
+
+[[language]]
+id = "lua"
+extensions = ["lua"]
+extra_word_chars = ""
+keywords = ["and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"]
+
+[[language.snippet]]
+label = "function"
+detail = "function definition"
+insert = "local function ${1:name}(${2:args})\n\t$0\nend"
+kind = "snippet"
+
+[[language]]
+id = "markdown"
+extensions = ["md", "markdown", "mdown", "mkd"]
+extra_word_chars = ""
+keywords = []
+
+[[language.snippet]]
+label = "link"
+detail = "Markdown link"
+insert = "[${1:text}](${2:https://})"
+kind = "snippet"
+
+[[language.snippet]]
+label = "code"
+detail = "fenced code block"
+insert = "```${1:language}\n${2:code}\n```"
+kind = "snippet"
+
+[[language]]
+id = "objective-c"
+extensions = ["m", "h"]
+extra_word_chars = "@"
+keywords = ["@interface", "@implementation", "@end", "@property", "@synthesize", "@import", "if", "else", "for", "while", "return", "switch", "case", "break", "continue", "typedef", "struct", "enum", "static", "const", "self", "super", "nil", "YES", "NO", "id"]
+
+[[language]]
+id = "objective-cpp"
+extensions = ["mm", "h"]
+extra_word_chars = "@"
+keywords = ["@interface", "@implementation", "@end", "@property", "@import", "class", "namespace", "template", "public", "private", "protected", "new", "delete", "nullptr", "true", "false", "if", "else", "for", "while", "return", "self", "super", "nil"]
+
+[[language]]
+id = "perl"
+extensions = ["pl", "pm"]
+extra_word_chars = "$@%"
+keywords = ["my", "our", "sub", "use", "package", "if", "elsif", "else", "unless", "while", "for", "foreach", "last", "next", "return", "local", "strict", "warnings", "say", "print", "shift", "scalar"]
+
+[[language]]
+id = "php"
+extensions = ["php", "phtml"]
+extra_word_chars = "$"
+keywords = ["abstract", "and", "array", "as", "break", "callable", "case", "catch", "class", "clone", "const", "continue", "declare", "default", "do", "echo", "else", "elseif", "empty", "enddeclare", "endfor", "endforeach", "endif", "endswitch", "endwhile", "eval", "exit", "extends", "final", "finally", "fn", "for", "foreach", "function", "global", "goto", "if", "implements", "include", "include_once", "instanceof", "insteadof", "interface", "isset", "list", "match", "namespace", "new", "or", "print", "private", "protected", "public", "readonly", "require", "require_once", "return", "static", "switch", "throw", "trait", "try", "unset", "use", "var", "while", "xor", "yield", "null", "true", "false"]
+
+[[language.snippet]]
+label = "function"
+detail = "function declaration"
+insert = "function ${1:name}(${2:$args}) {\n\t$0\n}"
+kind = "snippet"
+
+[[language]]
+id = "plain-text"
+extensions = ["txt", "text"]
+extra_word_chars = ""
+keywords = []
+
+[[language]]
+id = "python"
+extensions = ["py", "pyw"]
+extra_word_chars = ""
+keywords = ["and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "False", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "None", "nonlocal", "not", "or", "pass", "raise", "return", "True", "try", "while", "with", "yield", "self", "print", "len", "range", "enumerate", "zip", "open", "super"]
+
+[[language.snippet]]
+label = "def"
+detail = "function definition"
+insert = "def ${1:name}(${2:args}):\n\t$0\n"
+kind = "snippet"
+
+[[language.snippet]]
+label = "main"
+detail = "script entry point"
+insert = "def main():\n\t$0\n\n\nif __name__ == \"__main__\":\n\tmain()\n"
+kind = "snippet"
+
+[[language.snippet]]
+label = "for"
+detail = "for loop"
+insert = "for ${1:item} in ${2:items}:\n\t$0\n"
+kind = "snippet"
+
+[[language]]
+id = "ruby"
+extensions = ["rb", "rake", "gemspec", "ru"]
+extra_word_chars = ""
+keywords = ["alias", "and", "begin", "break", "case", "class", "def", "defined?", "do", "else", "elsif", "end", "ensure", "false", "for", "if", "in", "module", "next", "nil", "not", "or", "redo", "rescue", "retry", "return", "self", "super", "then", "true", "undef", "unless", "until", "when", "while", "yield", "puts", "require", "attr_accessor"]
+
+[[language.snippet]]
+label = "def"
+detail = "method definition"
+insert = "def ${1:name}(${2:args})\n\t$0\nend"
+kind = "snippet"
+
+[[language]]
+id = "rust"
+extensions = ["rs"]
+extra_word_chars = ""
+keywords = ["as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while", "Some", "None", "Ok", "Err"]
+
+[[language.snippet]]
+label = "fn"
+detail = "function"
+insert = "fn ${1:name}(${2:args}) -> ${3:()} {\n\t$0\n}"
+kind = "snippet"
+
+[[language.snippet]]
+label = "main"
+detail = "main function"
+insert = "fn main() {\n\t$0\n}"
+kind = "snippet"
+
+[[language.snippet]]
+label = "match"
+detail = "match expression"
+insert = "match ${1:value} {\n\t${2:pattern} => ${3:result},\n\t_ => $0,\n}"
+kind = "snippet"
+
+[[language]]
+id = "shell"
+extensions = ["sh", "bash", "zsh"]
+extra_word_chars = "$"
+keywords = ["if", "then", "else", "elif", "fi", "for", "while", "in", "do", "done", "case", "esac", "function", "return", "exit", "export", "local", "readonly", "unset", "shift", "set", "source", "alias", "echo", "printf", "read", "cd", "pwd", "test", "eval", "exec", "trap", "wait"]
+
+[[language.snippet]]
+label = "if"
+detail = "if statement"
+insert = "if [ ${1:condition} ]; then\n\t$0\nfi"
+kind = "snippet"
+
+[[language.snippet]]
+label = "for"
+detail = "for loop"
+insert = "for ${1:item} in ${2:items}; do\n\t$0\ndone"
+kind = "snippet"
+
+[[language]]
+id = "swift"
+extensions = ["swift"]
+extra_word_chars = ""
+keywords = ["associatedtype", "class", "deinit", "enum", "extension", "fileprivate", "func", "import", "init", "inout", "internal", "let", "open", "operator", "private", "protocol", "public", "rethrows", "static", "struct", "subscript", "typealias", "var", "break", "case", "continue", "default", "defer", "do", "else", "fallthrough", "for", "guard", "if", "in", "repeat", "return", "switch", "where", "while", "as", "catch", "false", "is", "nil", "super", "self", "Self", "throw", "throws", "true", "try"]
+
+[[language.snippet]]
+label = "func"
+detail = "function"
+insert = "func ${1:name}(${2:args}) ${3:-> Void} {\n\t$0\n}"
+kind = "snippet"
+
+[[language]]
+id = "toml"
+extensions = ["toml"]
+extra_word_chars = "-"
+keywords = ["true", "false"]
+
+[[language]]
+id = "typescript-browser"
+extensions = ["ts", "tsx"]
+extra_word_chars = "$"
+keywords = ["abstract", "any", "as", "async", "await", "bigint", "boolean", "break", "case", "catch", "class", "const", "continue", "declare", "default", "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "from", "function", "if", "implements", "import", "in", "infer", "instanceof", "interface", "is", "keyof", "let", "namespace", "never", "new", "null", "number", "object", "of", "private", "protected", "public", "readonly", "return", "static", "string", "super", "switch", "symbol", "this", "throw", "true", "try", "type", "typeof", "undefined", "unknown", "var", "void", "while", "yield"]
+
+[[language.snippet]]
+label = "interface"
+detail = "interface declaration"
+insert = "interface ${1:Name} {\n\t${2:property}: ${3:string};\n\t$0\n}"
+kind = "snippet"
+
+[[language.snippet]]
+label = "function"
+detail = "function declaration"
+insert = "function ${1:name}(${2:args}): ${3:void} {\n\t$0\n}"
+kind = "snippet"
+
+[[language]]
+id = "typescript-node"
+extensions = ["ts", "mts", "cts", "tsx"]
+extra_word_chars = "$"
+keywords = ["abstract", "any", "as", "async", "await", "bigint", "boolean", "break", "case", "catch", "class", "const", "continue", "declare", "default", "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "from", "function", "if", "implements", "import", "in", "infer", "instanceof", "interface", "is", "keyof", "let", "namespace", "never", "new", "null", "number", "object", "of", "private", "protected", "public", "readonly", "return", "static", "string", "super", "switch", "symbol", "this", "throw", "true", "try", "type", "typeof", "undefined", "unknown", "var", "void", "while", "yield"]
+
+[[language.snippet]]
+label = "interface"
+detail = "interface declaration"
+insert = "interface ${1:Name} {\n\t${2:property}: ${3:string};\n\t$0\n}"
+kind = "snippet"
+
+[[language]]
+id = "xml"
+extensions = ["xml", "xsd", "xsl", "xslt", "svg", "plist", "storyboard", "xib"]
+extra_word_chars = "-:"
+keywords = ["xml", "version", "encoding", "DOCTYPE", "stylesheet", "template", "match", "plist", "dict", "key", "string", "array", "true", "false"]
+
+[[language]]
+id = "yaml"
+extensions = ["yaml", "yml"]
+extra_word_chars = "-"
+keywords = ["true", "false", "null", "yes", "no", "on", "off"]

@@ -1,0 +1,42 @@
+id = "applescript"
+uuid = "AF9F60E4-632E-40AB-93D8-6A414F37DC9B"
+name = "AppleScript"
+extensions = ["applescript", "scpt"]
+shebangs = ["osascript"]
+modelines = ["applescript"]
+content_patterns = [
+  '@3 (?mi)^\s*tell\s+application\s+"',
+  '@2 (?mi)^\s*end\s+tell\s*$',
+  '(?mi)^\s*(set\s+\w+\s+to\s+|display\s+dialog\s+)',
+  '(?mi)^\s*on\s+\w+\s*\(.*\)\s*$',
+]
+# NSH has no AppleScript language of its own: the app registers one named
+# "AppleScript" ([`LanguageDef::editor_registration`]) that reuses syntect's syntax.
+editor_syntax = "AppleScript"
+syntax_hint = "applescript"
+grammar = "source.applescript"
+
+[comments]
+line = "--"
+block = ["(*", "*)"]
+
+[run]
+command = "osascript $filename"
+
+[[diagnostics]]
+id = "console-text"
+name = "Console Text"
+kind = "console_text"
+update = { on_run = true }
+output_mode = "regex"
+regex = '^(?<file>[^\s].*?):(?<offset>\d+):((?<endOffset>\d+):)? (script error:)?(?<message>.*)$'
+
+[[diagnostics]]
+id = "syntax"
+name = "AppleScript Syntax"
+kind = "command"
+update = { on_edit = true, on_run = true }
+options = { cancel_on_errors = true }
+output_mode = "unix"
+command = "osacompile -o /dev/null $filename"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+):? (?<message>.*)$'

@@ -1,0 +1,14 @@
+# Editor-only.
+id = "xml"
+name = "XML"
+extensions = ["xml", "xsd", "xsl", "xslt", "svg", "plist", "storyboard", "xib"]
+modelines = ["xml"]
+content_patterns = [
+  '@5 \A\s*<\?xml\b',
+  '@2 (?m)^\s*<[A-Za-z_][\w:.-]*(\s+[\w:.-]+="[^"]*")*\s*/?>\s*$',
+]
+editor_syntax = "XML"
+grammar = "text.xml"
+
+[comments]
+block = ["<!--", "-->"]

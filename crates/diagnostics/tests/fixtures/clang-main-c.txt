@@ -1,0 +1,6 @@
+main.c:3:19: error: expected ';' at end of declaration
+    3 |     int unused = 3
+      |                   ^
+      |                   ;
+fix-it:"main.c":{3:19-3:19}:";"
+1 error generated.

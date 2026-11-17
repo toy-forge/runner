@@ -1,0 +1,491 @@
+{
+  "title": "Vim",
+  "read_only": true,
+  "bindings": [
+    {
+      "title": "Load",
+      "key": "",
+      "compound": "[\"makeNotEditable\"]"
+    },
+    {
+      "title": "Unload",
+      "key": "",
+      "compound": "[\"makeEditable\"]"
+    },
+    {
+      "title": "Helper: Insert",
+      "key": "",
+      "compound": "[\"makeEditable\", \"collapseSelection\", \"discardNumberWithName:\", \"repeat\"]"
+    },
+    {
+      "title": "Helper: Exit Modes",
+      "key": "",
+      "compound": "[\"makeNotEditable\", \"collapseSelection\", \"moveLeft\"]"
+    },
+    {
+      "title": "Helper: Anchor",
+      "key": "",
+      "compound": "[\"testSelectionWithNameExists:\", \"anchor\", \"break:\", 999, \"saveSelectionWithName:\", \"anchor\"]"
+    },
+    {
+      "title": "Helper: Motion Pre",
+      "key": "",
+      "compound": "[\"testSelectionWithNameExists:\", \"anchor\", \"break:\", 999, \"saveSelectionWithName:\", \"anchor\"]"
+    },
+    {
+      "title": "Helper: Motion Post",
+      "key": "",
+      "compound": "[\"discardSelectionWithName:\", \"anchor\"]"
+    },
+    {
+      "title": "Helper: Recursive Repeat",
+      "key": "",
+      "compound": "[\"testNumberWithName:isGreaterThanNumber:\", \"repeat\", 0, \"subtractFromNumberWithName:number:\", \"repeat\", 1, [\"testNumberWithName:isEqualToNumber:\", \"repeat\", 0, \"break:\", 2], \"callEnclosingCommandList:\", 2]"
+    },
+    {
+      "title": "Helper: Motion Post Command",
+      "key": "",
+      "compound": "[\"testNumberWithNameExists:\", \"operator\", \"or:\", [[\"testNumberWithName:isEqualToNumber:\", \"operator\", 1, \"selectToSelectionWithName:\", \"operatorStart\", \"cutWithName:\", \"Delete\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"break:\", 1], [\"testNumberWithName:isEqualToNumber:\", \"operator\", 2, \"selectToSelectionWithName:\", \"operatorStart\", \"copyWithName:\", \"clipboard\", \"collapseSelectionToStart\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"break:\", 1], [\"testNumberWithName:isEqualToNumber:\", \"operator\", 3, \"selectToSelectionWithName:\", \"operatorStart\", \"cutWithName:\", \"Delete\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"makeEditable\", \"break:\", 1]]]"
+    },
+    {
+      "title": "Move Left",
+      "key": "h",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveLeftAndModifySelection\"], [\"moveLeft\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Right",
+      "key": "l",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveRightAndModifySelection\"], [\"moveRight\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Up",
+      "key": "k",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveUpAndModifySelection\"], [\"moveUp\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Down",
+      "key": "j",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveDownAndModifySelection\"], [\"moveDown\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Left (Arrow)",
+      "key": "",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveLeftAndModifySelection\"], [\"moveLeft\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Right (Arrow)",
+      "key": "",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveRightAndModifySelection\"], [\"moveRight\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Up (Arrow)",
+      "key": "",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveUpAndModifySelection\"], [\"moveUp\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Down (Arrow)",
+      "key": "",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveDownAndModifySelection\"], [\"moveDown\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Right (Space)",
+      "key": " ",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveRightAndModifySelection\"], [\"moveRight\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Left (Backspace)",
+      "key": "",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveLeftAndModifySelection\"], [\"moveLeft\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Down (^J)",
+      "key": "^j",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveDownAndModifySelection\"], [\"moveDown\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Down to Start of Line (Return)",
+      "key": "\r",
+      "compound": "[\"or:\", [[\"testIsEditable\", \"insertNewline\"], [\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveParagraphDownAndModifySelection\", \"moveToBeginningOfParagraphAndModifySelection\"], [\"moveParagraphDown\", \"moveToBeginningOfParagraph\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]]]"
+    },
+    {
+      "title": "Move Down to Start of Line",
+      "key": "+",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveParagraphDownAndModifySelection\", \"moveToBeginningOfParagraphAndModifySelection\"], [\"moveParagraphDown\", \"moveToBeginningOfParagraph\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Down to Start of Line (_)",
+      "key": "_",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveParagraphDownAndModifySelection\", \"moveToBeginningOfParagraphAndModifySelection\"], [\"moveParagraphDown\", \"moveToBeginningOfParagraph\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Move Up to Start of Line",
+      "key": "-",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveParagraphUpAndModifySelection\", \"moveToBeginningOfParagraphAndModifySelection\"], [\"moveParagraphUp\", \"moveToBeginningOfParagraph\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Word Forward",
+      "key": "w",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveWordForwardAndModifySelection\"], [\"moveWordForward\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Word Forward (Shift)",
+      "key": "W",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveWordForwardAndModifySelection\"], [\"moveWordForward\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Back Word",
+      "key": "b",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveWordBackwardAndModifySelection\"], [\"moveWordBackward\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Back Word (Shift)",
+      "key": "B",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveWordBackwardAndModifySelection\"], [\"moveWordBackward\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "End of Word",
+      "key": "e",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveWordForwardAndModifySelection\"], [\"moveWordForward\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "End of Word (Shift)",
+      "key": "E",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveWordForwardAndModifySelection\"], [\"moveWordForward\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Start of Line",
+      "key": "^",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveToBeginningOfParagraphAndModifySelection\"], [\"moveToBeginningOfParagraph\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Column 0 (|)",
+      "key": "|",
+      "compound": "[\"testNotEditable\", \"moveToBeginningOfParagraph\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "End of Line",
+      "key": "$",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveToEndOfParagraphAndModifySelection\"], [\"moveToEndOfParagraph\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Go to Previous Section",
+      "key": "{",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveParagraphUpAndModifySelection\"], [\"moveParagraphUp\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Go to Next Section",
+      "key": "}",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveParagraphDownAndModifySelection\"], [\"moveParagraphDown\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Go to First Visible Line",
+      "key": "H",
+      "compound": "[\"testNotEditable\", \"moveToBeginningOfVisibleArea\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Go to Middle Visible Line",
+      "key": "M",
+      "compound": "[\"testNotEditable\", \"moveToCenterOfVisibleArea\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Go to Last Visible Line",
+      "key": "L",
+      "compound": "[\"testNotEditable\", \"moveToEndOfVisibleArea\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Half Page Down",
+      "key": "^d",
+      "compound": "[\"testNotEditable\", \"pageDown\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Half Page Up",
+      "key": "^u",
+      "compound": "[\"testNotEditable\", \"pageUp\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Page Down",
+      "key": "^f",
+      "compound": "[\"testNotEditable\", \"pageDown\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Page Up",
+      "key": "^b",
+      "compound": "[\"testNotEditable\", \"pageUp\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Scroll Line Down",
+      "key": "^e",
+      "compound": "[\"testNotEditable\", \"scrollSelectionToTop\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Scroll Line Up",
+      "key": "^y",
+      "compound": "[\"testNotEditable\", \"scrollSelectionToBottom\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Column 0",
+      "key": "0",
+      "compound": "[\"testNotEditable\", [\"testNumberWithNameExists:\", \"repeat\", \"appendToNumberWithName:number:\", \"repeat\", 0, \"break:\", 999], [\"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"moveToBeginningOfParagraphAndModifySelection\"], [\"moveToBeginningOfParagraph\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]]"
+    },
+    {
+      "title": "Count 1",
+      "key": "1",
+      "compound": "[\"testNotEditable\", \"appendToNumberWithName:number:\", \"repeat\", 1]"
+    },
+    {
+      "title": "Count 2",
+      "key": "2",
+      "compound": "[\"testNotEditable\", \"appendToNumberWithName:number:\", \"repeat\", 2]"
+    },
+    {
+      "title": "Count 3",
+      "key": "3",
+      "compound": "[\"testNotEditable\", \"appendToNumberWithName:number:\", \"repeat\", 3]"
+    },
+    {
+      "title": "Count 4",
+      "key": "4",
+      "compound": "[\"testNotEditable\", \"appendToNumberWithName:number:\", \"repeat\", 4]"
+    },
+    {
+      "title": "Count 5",
+      "key": "5",
+      "compound": "[\"testNotEditable\", \"appendToNumberWithName:number:\", \"repeat\", 5]"
+    },
+    {
+      "title": "Count 6",
+      "key": "6",
+      "compound": "[\"testNotEditable\", \"appendToNumberWithName:number:\", \"repeat\", 6]"
+    },
+    {
+      "title": "Count 7",
+      "key": "7",
+      "compound": "[\"testNotEditable\", \"appendToNumberWithName:number:\", \"repeat\", 7]"
+    },
+    {
+      "title": "Count 8",
+      "key": "8",
+      "compound": "[\"testNotEditable\", \"appendToNumberWithName:number:\", \"repeat\", 8]"
+    },
+    {
+      "title": "Count 9",
+      "key": "9",
+      "compound": "[\"testNotEditable\", \"appendToNumberWithName:number:\", \"repeat\", 9]"
+    },
+    {
+      "title": "Go to Line",
+      "key": "G",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testNumberWithNameExists:\", \"repeat\", \"moveToLineOfNumberWithName:\", \"repeat\"], [\"moveToEndOfDocument\"]], \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Match Delimiter",
+      "key": "%",
+      "compound": "[\"testNotEditable\", \"balanceDelimiters\", \"collapseSelectionToStart\"]"
+    },
+    {
+      "title": "Delete",
+      "key": "d",
+      "compound": "[\"testNotEditable\", [\"testNumberWithNameExists:\", \"operator\", \"or:\", [[\"testNumberWithName:isEqualToNumber:\", \"operator\", 1, [\"selectParagraph\", \"cutWithName:\", \"Delete\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"break:\", 999], \"break:\", 999], [\"testNumberWithName:isEqualToNumber:\", \"operator\", 2, [\"selectParagraph\", \"copyWithName:\", \"clipboard\", \"collapseSelectionToStart\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"break:\", 999], \"break:\", 999], [\"testNumberWithName:isEqualToNumber:\", \"operator\", 3, [\"selectParagraph\", \"cutWithName:\", \"Delete\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"makeEditable\", \"break:\", 999], \"break:\", 999]]], \"saveSelectionWithName:\", \"operatorStart\", \"setNumber:withName:\", 1, \"operator\"]"
+    },
+    {
+      "title": "Yank",
+      "key": "y",
+      "compound": "[\"testNotEditable\", [\"testNumberWithNameExists:\", \"operator\", \"or:\", [[\"testNumberWithName:isEqualToNumber:\", \"operator\", 1, [\"selectParagraph\", \"cutWithName:\", \"Delete\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"break:\", 999], \"break:\", 999], [\"testNumberWithName:isEqualToNumber:\", \"operator\", 2, [\"selectParagraph\", \"copyWithName:\", \"clipboard\", \"collapseSelectionToStart\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"break:\", 999], \"break:\", 999], [\"testNumberWithName:isEqualToNumber:\", \"operator\", 3, [\"selectParagraph\", \"cutWithName:\", \"Delete\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"makeEditable\", \"break:\", 999], \"break:\", 999]]], \"saveSelectionWithName:\", \"operatorStart\", \"setNumber:withName:\", 2, \"operator\"]"
+    },
+    {
+      "title": "Change",
+      "key": "c",
+      "compound": "[\"testNotEditable\", [\"testNumberWithNameExists:\", \"operator\", \"or:\", [[\"testNumberWithName:isEqualToNumber:\", \"operator\", 1, [\"selectParagraph\", \"cutWithName:\", \"Delete\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"break:\", 999], \"break:\", 999], [\"testNumberWithName:isEqualToNumber:\", \"operator\", 2, [\"selectParagraph\", \"copyWithName:\", \"clipboard\", \"collapseSelectionToStart\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"break:\", 999], \"break:\", 999], [\"testNumberWithName:isEqualToNumber:\", \"operator\", 3, [\"selectParagraph\", \"cutWithName:\", \"Delete\", \"discardSelectionWithName:\", \"operatorStart\", \"discardNumberWithName:\", \"operator\", \"makeEditable\", \"break:\", 999], \"break:\", 999]]], \"saveSelectionWithName:\", \"operatorStart\", \"setNumber:withName:\", 3, \"operator\"]"
+    },
+    {
+      "title": "Delete Character",
+      "key": "x",
+      "compound": "[\"testNotEditable\", \"deleteForward\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Delete Character Backwards",
+      "key": "X",
+      "compound": "[\"testNotEditable\", \"deleteBackward\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Delete to End of Line",
+      "key": "D",
+      "compound": "[\"testNotEditable\", \"saveSelectionWithName:\", \"start\", \"moveToEndOfParagraph\", \"selectToSelectionWithName:\", \"start\", \"cutWithName:\", \"Delete\", \"discardSelectionWithName:\", \"start\"]"
+    },
+    {
+      "title": "Change to End of Line",
+      "key": "C",
+      "compound": "[\"testNotEditable\", \"saveSelectionWithName:\", \"start\", \"moveToEndOfParagraph\", \"selectToSelectionWithName:\", \"start\", \"cutWithName:\", \"Delete\", \"discardSelectionWithName:\", \"start\", \"callCompoundCommand:\", \"Helper: Insert\"]"
+    },
+    {
+      "title": "Substitute",
+      "key": "s",
+      "compound": "[\"testNotEditable\", \"deleteForward\", \"callCompoundCommand:\", \"Helper: Insert\"]"
+    },
+    {
+      "title": "Substitute Line",
+      "key": "S",
+      "compound": "[\"testNotEditable\", \"selectParagraph\", \"cutWithName:\", \"Delete\", \"callCompoundCommand:\", \"Helper: Insert\"]"
+    },
+    {
+      "title": "Replace to End of Line",
+      "key": "R",
+      "compound": "[\"testNotEditable\", \"cutWithName:\", \"Delete\", \"moveToEndOfParagraphAndModifySelection\", \"cutWithName:\", \"Delete\", \"callCompoundCommand:\", \"Helper: Insert\"]"
+    },
+    {
+      "title": "Join Lines",
+      "key": "J",
+      "compound": "[\"testNotEditable\", \"moveToEndOfParagraph\", \"deleteForward\", \"insertText:\", \" \"]"
+    },
+    {
+      "title": "Shift Right",
+      "key": ">",
+      "compound": "[\"testNotEditable\", \"shiftRightSelection\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Shift Left",
+      "key": "<",
+      "compound": "[\"testNotEditable\", \"shiftLeftSelection\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\", \"callCompoundCommand:\", \"Helper: Motion Post Command\"]"
+    },
+    {
+      "title": "Undo",
+      "key": "u",
+      "compound": "[\"testNotEditable\", \"undo\"]"
+    },
+    {
+      "title": "Redo",
+      "key": "^r",
+      "compound": "[\"testNotEditable\", \"redo\"]"
+    },
+    {
+      "title": "Put",
+      "key": "p",
+      "compound": "[\"testNotEditable\", \"setTextWithNameFromClipboard:\", \"clipboard\", \"pasteWithName:\", \"clipboard\"]"
+    },
+    {
+      "title": "Put Before Cursor",
+      "key": "P",
+      "compound": "[\"testNotEditable\", \"setTextWithNameFromClipboard:\", \"clipboard\", \"pasteWithName:\", \"clipboard\"]"
+    },
+    {
+      "title": "Visual",
+      "key": "v",
+      "compound": "[\"testNotEditable\", \"or:\", [[\"testSelectedLengthGreaterThan:\", 0, \"collapseSelection\"], [\"moveRightAndModifySelection\"]]]"
+    },
+    {
+      "title": "Visual Line",
+      "key": "V",
+      "compound": "[\"testNotEditable\", \"selectParagraph\"]"
+    },
+    {
+      "title": "Insert Before Cursor",
+      "key": "i",
+      "compound": "[\"testNotEditable\", \"callCompoundCommand:\", \"Helper: Insert\"]"
+    },
+    {
+      "title": "Insert After Cursor",
+      "key": "a",
+      "compound": "[\"testNotEditable\", \"moveRight\", \"callCompoundCommand:\", \"Helper: Insert\"]"
+    },
+    {
+      "title": "Insert After Line",
+      "key": "A",
+      "compound": "[\"testNotEditable\", \"moveToEndOfParagraph\", \"callCompoundCommand:\", \"Helper: Insert\"]"
+    },
+    {
+      "title": "Insert Before Line",
+      "key": "I",
+      "compound": "[\"testNotEditable\", \"moveToBeginningOfParagraph\", \"callCompoundCommand:\", \"Helper: Insert\"]"
+    },
+    {
+      "title": "Insert New Line Below",
+      "key": "o",
+      "compound": "[\"testNotEditable\", \"moveToEndOfParagraph\", \"insertNewline\", \"callCompoundCommand:\", \"Helper: Insert\"]"
+    },
+    {
+      "title": "Insert New Line Above",
+      "key": "O",
+      "compound": "[\"testNotEditable\", \"moveToBeginningOfParagraph\", \"insertNewline\", \"moveParagraphUp\", \"callCompoundCommand:\", \"Helper: Insert\"]"
+    },
+    {
+      "title": "Exit Insert Mode (Esc)",
+      "key": "\u001b",
+      "compound": "[\"callCompoundCommand:\", \"Helper: Exit Modes\"]"
+    },
+    {
+      "title": "Exit Insert Mode (^C)",
+      "key": "^c",
+      "compound": "[\"callCompoundCommand:\", \"Helper: Exit Modes\"]"
+    },
+    {
+      "title": "Exit Insert Mode (^[)",
+      "key": "^\u001b",
+      "compound": "[\"callCompoundCommand:\", \"Helper: Exit Modes\"]"
+    },
+    {
+      "title": "Mark",
+      "key": "m",
+      "compound": "[\"testNotEditable\", {\"a\": [\"saveSelectionWithName:\", \"mark_a\"], \"b\": [\"saveSelectionWithName:\", \"mark_b\"], \"c\": [\"saveSelectionWithName:\", \"mark_c\"], \"d\": [\"saveSelectionWithName:\", \"mark_d\"], \"e\": [\"saveSelectionWithName:\", \"mark_e\"], \"f\": [\"saveSelectionWithName:\", \"mark_f\"], \"g\": [\"saveSelectionWithName:\", \"mark_g\"], \"h\": [\"saveSelectionWithName:\", \"mark_h\"], \"i\": [\"saveSelectionWithName:\", \"mark_i\"], \"j\": [\"saveSelectionWithName:\", \"mark_j\"], \"k\": [\"saveSelectionWithName:\", \"mark_k\"], \"l\": [\"saveSelectionWithName:\", \"mark_l\"], \"m\": [\"saveSelectionWithName:\", \"mark_m\"], \"n\": [\"saveSelectionWithName:\", \"mark_n\"], \"o\": [\"saveSelectionWithName:\", \"mark_o\"], \"p\": [\"saveSelectionWithName:\", \"mark_p\"], \"q\": [\"saveSelectionWithName:\", \"mark_q\"], \"r\": [\"saveSelectionWithName:\", \"mark_r\"], \"s\": [\"saveSelectionWithName:\", \"mark_s\"], \"t\": [\"saveSelectionWithName:\", \"mark_t\"], \"u\": [\"saveSelectionWithName:\", \"mark_u\"], \"v\": [\"saveSelectionWithName:\", \"mark_v\"], \"w\": [\"saveSelectionWithName:\", \"mark_w\"], \"x\": [\"saveSelectionWithName:\", \"mark_x\"], \"y\": [\"saveSelectionWithName:\", \"mark_y\"], \"z\": [\"saveSelectionWithName:\", \"mark_z\"]}]"
+    },
+    {
+      "title": "Move to Mark",
+      "key": "`",
+      "compound": "[{\"a\": [\"restoreSelectionWithName:\", \"mark_a\"], \"b\": [\"restoreSelectionWithName:\", \"mark_b\"], \"c\": [\"restoreSelectionWithName:\", \"mark_c\"], \"d\": [\"restoreSelectionWithName:\", \"mark_d\"], \"e\": [\"restoreSelectionWithName:\", \"mark_e\"], \"f\": [\"restoreSelectionWithName:\", \"mark_f\"], \"g\": [\"restoreSelectionWithName:\", \"mark_g\"], \"h\": [\"restoreSelectionWithName:\", \"mark_h\"], \"i\": [\"restoreSelectionWithName:\", \"mark_i\"], \"j\": [\"restoreSelectionWithName:\", \"mark_j\"], \"k\": [\"restoreSelectionWithName:\", \"mark_k\"], \"l\": [\"restoreSelectionWithName:\", \"mark_l\"], \"m\": [\"restoreSelectionWithName:\", \"mark_m\"], \"n\": [\"restoreSelectionWithName:\", \"mark_n\"], \"o\": [\"restoreSelectionWithName:\", \"mark_o\"], \"p\": [\"restoreSelectionWithName:\", \"mark_p\"], \"q\": [\"restoreSelectionWithName:\", \"mark_q\"], \"r\": [\"restoreSelectionWithName:\", \"mark_r\"], \"s\": [\"restoreSelectionWithName:\", \"mark_s\"], \"t\": [\"restoreSelectionWithName:\", \"mark_t\"], \"u\": [\"restoreSelectionWithName:\", \"mark_u\"], \"v\": [\"restoreSelectionWithName:\", \"mark_v\"], \"w\": [\"restoreSelectionWithName:\", \"mark_w\"], \"x\": [\"restoreSelectionWithName:\", \"mark_x\"], \"y\": [\"restoreSelectionWithName:\", \"mark_y\"], \"z\": [\"restoreSelectionWithName:\", \"mark_z\"]}]"
+    },
+    {
+      "title": "Move to Marked Line",
+      "key": "'",
+      "compound": "[{\"a\": [\"restoreSelectionWithName:\", \"mark_a\", \"moveToBeginningOfParagraph\"], \"b\": [\"restoreSelectionWithName:\", \"mark_b\", \"moveToBeginningOfParagraph\"], \"c\": [\"restoreSelectionWithName:\", \"mark_c\", \"moveToBeginningOfParagraph\"], \"d\": [\"restoreSelectionWithName:\", \"mark_d\", \"moveToBeginningOfParagraph\"], \"e\": [\"restoreSelectionWithName:\", \"mark_e\", \"moveToBeginningOfParagraph\"], \"f\": [\"restoreSelectionWithName:\", \"mark_f\", \"moveToBeginningOfParagraph\"], \"g\": [\"restoreSelectionWithName:\", \"mark_g\", \"moveToBeginningOfParagraph\"], \"h\": [\"restoreSelectionWithName:\", \"mark_h\", \"moveToBeginningOfParagraph\"], \"i\": [\"restoreSelectionWithName:\", \"mark_i\", \"moveToBeginningOfParagraph\"], \"j\": [\"restoreSelectionWithName:\", \"mark_j\", \"moveToBeginningOfParagraph\"], \"k\": [\"restoreSelectionWithName:\", \"mark_k\", \"moveToBeginningOfParagraph\"], \"l\": [\"restoreSelectionWithName:\", \"mark_l\", \"moveToBeginningOfParagraph\"], \"m\": [\"restoreSelectionWithName:\", \"mark_m\", \"moveToBeginningOfParagraph\"], \"n\": [\"restoreSelectionWithName:\", \"mark_n\", \"moveToBeginningOfParagraph\"], \"o\": [\"restoreSelectionWithName:\", \"mark_o\", \"moveToBeginningOfParagraph\"], \"p\": [\"restoreSelectionWithName:\", \"mark_p\", \"moveToBeginningOfParagraph\"], \"q\": [\"restoreSelectionWithName:\", \"mark_q\", \"moveToBeginningOfParagraph\"], \"r\": [\"restoreSelectionWithName:\", \"mark_r\", \"moveToBeginningOfParagraph\"], \"s\": [\"restoreSelectionWithName:\", \"mark_s\", \"moveToBeginningOfParagraph\"], \"t\": [\"restoreSelectionWithName:\", \"mark_t\", \"moveToBeginningOfParagraph\"], \"u\": [\"restoreSelectionWithName:\", \"mark_u\", \"moveToBeginningOfParagraph\"], \"v\": [\"restoreSelectionWithName:\", \"mark_v\", \"moveToBeginningOfParagraph\"], \"w\": [\"restoreSelectionWithName:\", \"mark_w\", \"moveToBeginningOfParagraph\"], \"x\": [\"restoreSelectionWithName:\", \"mark_x\", \"moveToBeginningOfParagraph\"], \"y\": [\"restoreSelectionWithName:\", \"mark_y\", \"moveToBeginningOfParagraph\"], \"z\": [\"restoreSelectionWithName:\", \"mark_z\", \"moveToBeginningOfParagraph\"]}]"
+    },
+    {
+      "title": "Replace Character",
+      "key": "r",
+      "compound": "[\"testNotEditable\", {\"any\": [\"copyTypedCharacterWithName:\", \"char\", \"deleteForward\", \"pasteWithName:\", \"char\"]}]"
+    },
+    {
+      "title": "Find Typed Character",
+      "key": "f",
+      "compound": "[\"testNotEditable\", {\"any\": [\"copyTypedCharacterWithName:\", \"char\", \"findCopiedTextWithNameToEndOfLine:\", \"char\"]}, \"callCompoundCommand:\", \"Helper: Motion Post\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\"]"
+    },
+    {
+      "title": "Find Typed Character And Move Left",
+      "key": "t",
+      "compound": "[\"testNotEditable\", {\"any\": [\"copyTypedCharacterWithName:\", \"char\", \"findCopiedTextWithNameToEndOfLine:\", \"char\"]}, \"callCompoundCommand:\", \"Helper: Motion Post\", \"moveLeft\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\"]"
+    },
+    {
+      "title": "Find Typed Character Backwards",
+      "key": "F",
+      "compound": "[\"testNotEditable\", {\"any\": [\"copyTypedCharacterWithName:\", \"char\", \"findCopiedTextWithNameToBeginningOfLine:\", \"char\"]}, \"callCompoundCommand:\", \"Helper: Motion Post\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\"]"
+    },
+    {
+      "title": "Find Typed Character Backwards And Move Left",
+      "key": "T",
+      "compound": "[\"testNotEditable\", {\"any\": [\"copyTypedCharacterWithName:\", \"char\", \"findCopiedTextWithNameToBeginningOfLine:\", \"char\"]}, \"callCompoundCommand:\", \"Helper: Motion Post\", \"moveRight\", \"callCompoundCommand:\", \"Helper: Recursive Repeat\"]"
+    },
+    {
+      "title": "Find",
+      "key": "/",
+      "compound": "[\"testNotEditable\", \"setNumber:withName:\", 0, \"findBackwards\", \"selectMenuItem:\", \"Find...\"]"
+    },
+    {
+      "title": "Find Backwards",
+      "key": "?",
+      "compound": "[\"testNotEditable\", \"setNumber:withName:\", 1, \"findBackwards\", \"selectMenuItem:\", \"Find...\"]"
+    },
+    {
+      "title": "Find Next",
+      "key": "n",
+      "compound": "[\"testNotEditable\", \"selectMenuItem:\", \"Find Next\"]"
+    },
+    {
+      "title": "Find Previous",
+      "key": "N",
+      "compound": "[\"testNotEditable\", \"selectMenuItem:\", \"Find Previous\"]"
+    },
+    {
+      "title": "Position",
+      "key": "z",
+      "compound": "[\"testNotEditable\", {\"\\r\": [\"scrollSelectionToTop\"], \".\": [\"scrollSelectionToCenter\"], \"-\": [\"scrollSelectionToBottom\"], \"any\": []}]"
+    }
+  ]
+}

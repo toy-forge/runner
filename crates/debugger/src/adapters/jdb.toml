@@ -1,0 +1,55 @@
+# Java's jdb attached over a JDWP socket.
+#
+# Best effort: jdb is driven with the stock Java debug agent.  The debuggee
+# command is generated from the prepared program path (a class file) and a
+# free local port; the session spawns it before attaching jdb.  Variable and
+# frame parsing use jdb's text output.
+id = "jdb"
+name = "Java (jdb)"
+languages = ["java"]
+prompt = '(?m)^(?:[^\r\n]*\[\d+\] |> )$'
+termination = 'The application exited'
+ignore = '^\s*$'
+install_hint = "Install a JDK (for example Temurin or OpenJDK) to use jdb."
+
+[start]
+program = "jdb"
+args = ["-attach", "127.0.0.1:{port}"]
+pty = false
+server = ["java", "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:{port}", "-cp", "{program_dir}", "{program_stem}"]
+
+[parsers]
+kind = "jdb"
+stop_location = '(?m)^Breakpoint hit: .*line=(?<line>\d+)'
+frames = '^\s*\[(?<index>\d+)\] (?<name>[^(]+)\((?<file>[^:)]+):?(?<line>\d+)?\)'
+breakpoint_set = '(?m)^Set breakpoint (?<id>\w+)\.(?<line>\d+)'
+reverse_frames = false
+hide_frames = ["java.base/", "jdk.internal."]
+
+[options]
+prompt_means_paused = true
+requires_paused_commands = true
+supports_pause = true
+pause_with_signal = true
+echo = "none"
+default_depth = 2
+max_children = 100
+
+[commands]
+launch = "run"
+continue = "cont"
+step_over = "next"
+step_in = "step"
+step_out = "step up"
+breakpoint_set = "stop at {program_stem}:{line}{condition_clause}"
+condition_clause = " if {condition}"
+breakpoint_clear = "clear {program_stem}:{line}"
+breakpoint_clear_all = "clear"
+backtrace = "where all"
+frame_up = "up {count}"
+frame_down = "down {count}"
+variables = "locals"
+evaluate = "print {expr}"
+print_description = "dump {expr}"
+set_variable = "set {path} = {value}"
+quit = "exit"

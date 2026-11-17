@@ -1,0 +1,22 @@
+[package]
+name = "scratch-debugger"
+description = "ScratchRunner debugger back end: adapter model, debug sessions, breakpoints."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fancy-regex = "0.16"
+libc = "0.2"
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.9"
+
+[dev-dependencies]
+tempfile = "3"

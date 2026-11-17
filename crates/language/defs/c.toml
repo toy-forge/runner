@@ -1,0 +1,72 @@
+id = "c"
+uuid = "F158B03F-4059-4FBE-95FB-F101FC3C2097"
+name = "C"
+extensions = ["c", "h"]
+default_for = ["h"]
+modelines = ["c"]
+content_patterns = [
+  '@2 (?m)^\s*#\s*include\s*<(stdio|stdlib|string|stdint|stdbool|unistd|math|ctype|errno|time)\.h>',
+  '(?m)^\s*(int|void)\s+main\s*\(',
+  '\bprintf\s*\(',
+  '\b(malloc|calloc|free|sizeof)\s*\(',
+]
+editor_syntax = "C"
+grammar = "source.c"
+debugger = "lldb"
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = "$compiler"
+flags = "-std=c11"
+
+[run.compile]
+kind = "steps"
+strip_flags = ["-cr-noautoinclude", "-sr-noautoinclude"]
+
+[[run.compile.bindings]]
+name = "sources"
+source = { kind = "local_sources", family = "c", disable_flags = ["-cr-noautoinclude", "-sr-noautoinclude"] }
+
+[[run.compile.steps]]
+name = "Compile"
+via = ["xcrun"]
+program = "clang"
+args = ["-o", "$output", "$sources", "$flags", "-fno-caret-diagnostics", "-fno-diagnostics-show-option", "-fmessage-length=0"]
+debug_args = ["-g"]
+missing_tool = "Could not find the C compiler. Install Apple's command line developer tools by running \"xcode-select --install\" in Terminal."
+produces = { value = "$output" }
+
+[[diagnostics]]
+id = "clang"
+name = "Clang"
+kind = "clang"
+update = { on_edit = true, on_run = true }
+options = { cancel_on_errors = true }
+output_mode = "unix"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+):? (?<message>.*)$'
+
+[[templates]]
+name = "Main File"
+extension = "c"
+default = true
+text = "#include <stdio.h>\n\nint main(int argc, char *argv[]) {\n\t<##>\n}"
+
+[[templates]]
+name = "Header"
+extension = "h"
+text = "#ifndef ____FILEBASENAME_______FILEEXTENSION____\n#define ____FILEBASENAME_______FILEEXTENSION____\n\n<##>\n\n#endif"
+
+[[templates]]
+name = "Header-C Pair"
+extension = "h"
+name_on_creation = true
+text = "#ifndef ____FILEBASENAME_______FILEEXTENSION____\n#define ____FILEBASENAME_______FILEEXTENSION____\n\n<##>\n\n#endif"
+
+[[templates]]
+name = "Header-C Pair"
+extension = "c"
+name_on_creation = true
+text = "#include \"___FILEBASENAME___.h\"\n\n"

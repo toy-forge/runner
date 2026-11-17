@@ -1,0 +1,81 @@
+id = "rust"
+uuid = "834D5121-761E-4B58-B40B-82FA581EB2AE"
+name = "Rust"
+extensions = ["rs"]
+modelines = ["rust"]
+content_patterns = [
+  '@3 (?m)^\s*(pub\s+)?fn\s+main\s*\(\s*\)',
+  '@2 \blet\s+mut\s+\w+',
+  '@2 (?m)^\s*use\s+(std|core|crate|self|super)::',
+  '\b(println|eprintln|format|vec|panic|assert_eq)!\s*[(\[]',
+  '(?m)^\s*(pub\s+)?(struct|enum|trait|impl|mod)\s+\w+',
+  '->\s*(Result|Option)<',
+]
+editor_syntax = "Rust"
+grammar = "source.rust"
+debugger = "lldb"
+requires_external_components = true
+
+[installer]
+executable = "rust"
+name = "the Rust compiler"
+url = "https://www.rust-lang.org/"
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = "$compiler"
+# Edition 2021 (CodeRunner passes no flags, which compiles as the 2015 edition).
+flags = "--edition 2021"
+
+[run.env]
+path_append = ["$home/.cargo/bin"]
+
+[run.compile]
+kind = "steps"
+
+[[run.compile.bindings]]
+name = "crate_name"
+source = { kind = "identifier", value = "$stem" }
+
+[[run.compile.steps]]
+name = "Compile"
+program = "rustc"
+args = ["-o", "$output", "--crate-name", "$crate_name", "$filename", "$flags"]
+debug_args = ["-g"]
+produces = { value = "$output" }
+
+[[diagnostics]]
+id = "compile"
+name = "Compile Script"
+kind = "compile_script"
+update = { on_edit = true, on_run = true }
+options = { cancel_on_errors = true }
+output_mode = "regex"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+)?:? (\d+:\d+ )?(?<message>.*)$'
+
+[[diagnostics]]
+id = "console-text"
+name = "Console Text"
+kind = "console_text"
+update = { on_run = true }
+output_mode = "regex"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+)?:? (\d+:\d+ )?(?<message>.*)$'
+
+[[templates]]
+name = "Main File"
+extension = "rs"
+default = true
+text = "fn main() {\n\t<##>\n}"
+
+[[docs]]
+name = "Rust Std"
+type = "search"
+url = "https://doc.rust-lang.org/std/index.html?search={query}"
+
+[[docs]]
+name = "The Rust Book"
+type = "bookmark"
+url = "https://doc.rust-lang.org/book/"

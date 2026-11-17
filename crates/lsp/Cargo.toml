@@ -1,0 +1,30 @@
+[package]
+name = "scratch-lsp"
+description = "ScratchRunner's language-intelligence layer: language-server client and manager, virtual workspaces, snippet and markup models, and server-free completion fallbacks."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "2"
+tokio = { workspace = true }
+toml = "0.9"
+tracing = { workspace = true }
+
+[dev-dependencies]
+scratch-language = { path = "../language" }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+# A scripted language server the integration tests drive (lifecycle, sync, cancellation).
+[[bin]]
+name = "scratch-lsp-mock-server"
+path = "tests/support/mock_server.rs"
+test = false
+doc = false

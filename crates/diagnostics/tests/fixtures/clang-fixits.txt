@@ -1,0 +1,20 @@
+fx2.c:3:11: warning: using the result of an assignment as a condition without parentheses [-Wparentheses]
+    3 |     if (x = 2) { return 0; }
+      |         ~~^~~
+fx2.c:3:11: note: place parentheses around the assignment to silence this warning
+    3 |     if (x = 2) { return 0; }
+      |           ^  
+      |         (    )
+fix-it:"fx2.c":{3:9-3:9}:"("
+fix-it:"fx2.c":{3:14-3:14}:")"
+fx2.c:3:11: note: use '==' to turn this assignment into an equality comparison
+    3 |     if (x = 2) { return 0; }
+      |           ^
+      |           ==
+fix-it:"fx2.c":{3:11-3:12}:"=="
+fx2.c:4:13: error: expected ';' after return statement
+    4 |     return 1
+      |             ^
+      |             ;
+fix-it:"fx2.c":{4:13-4:13}:";"
+1 warning and 1 error generated.

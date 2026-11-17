@@ -1,0 +1,121 @@
+id = "objective-cpp"
+uuid = "54152989-9931-4123-8B23-584872677F75"
+name = "Objective-C++"
+extensions = ["mm", "h"]
+modelines = ["objcpp", "objective-c++", "objective-cpp"]
+content_patterns = [
+  '@3 (?m)^\s*#\s*import\s*<(Foundation|Cocoa|AppKit|UIKit)/[^\n]*\n(.*\n)*.*\bstd::',
+  '@2 \[\[\w+ (alloc|new)\][^\n]*\n(.*\n)*.*\bstd::',
+]
+editor_syntax = "Objective-C++"
+grammar = "source.objc++"
+debugger = "lldb"
+requires_external_components = true
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = "$compiler"
+flags = "-fobjc-arc"
+
+[run.compile]
+kind = "steps"
+strip_flags = ["-cr-noautoinclude", "-sr-noautoinclude"]
+
+[[run.compile.bindings]]
+name = "sources"
+source = { kind = "local_sources", family = "obj_cpp", disable_flags = ["-cr-noautoinclude", "-sr-noautoinclude"] }
+
+[[run.compile.bindings]]
+name = "frameworks"
+source = { kind = "frameworks", of = "sources" }
+
+[[run.compile.steps]]
+name = "Compile"
+via = ["xcrun"]
+program = "clang++"
+args = ["-o", "$output", "-x", "objective-c++", "$sources", "$frameworks", "-lc++", "$flags", "-fno-caret-diagnostics", "-fno-diagnostics-show-option", "-fmessage-length=0"]
+debug_args = ["-g"]
+missing_tool = "Could not find the Objective-C++ compiler. Install Apple's command line developer tools by running \"xcode-select --install\" in Terminal."
+produces = { value = "$output" }
+
+[[diagnostics]]
+id = "clang"
+name = "Clang"
+kind = "clang"
+update = { on_edit = true, on_run = true }
+options = { cancel_on_errors = true }
+output_mode = "unix"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+):? (?<message>.*)$'
+
+[[templates]]
+name = "Main File"
+extension = "mm"
+default = true
+text = "#import <Foundation/Foundation.h>\n\nint main(int argc, char *argv[]) {\n\t@autoreleasepool {\n\t\t<##>\n\t}\n\treturn 0;\n}"
+
+[[templates]]
+name = "Header"
+extension = "h"
+text = "#import <Foundation/Foundation.h>\n\n<##>\n"
+
+[[templates]]
+name = "Objective-C Class"
+extension = "h"
+name_on_creation = true
+text = "#import <Foundation/Foundation.h>\n\n@interface ___FILEBASENAME___ : NSObject\n\n<##>\n\n@end\n"
+
+[[templates]]
+name = "Objective-C Class"
+extension = "mm"
+name_on_creation = true
+text = "#import \"___FILEBASENAME___.h\"\n\n@implementation ___FILEBASENAME___\n\n<##>\n\n@end\n"
+
+[[templates]]
+name = "C++ Class"
+extension = "h"
+name_on_creation = true
+text = "#ifndef ____FILEBASENAME_______FILEEXTENSION____\n#define ____FILEBASENAME_______FILEEXTENSION____\n\nclass ___FILEBASENAME___ {\npublic:\n\t___FILEBASENAME___();\n\tvirtual ~___FILEBASENAME___();\n\n\t<##>\n};\n\n#endif"
+
+[[templates]]
+name = "C++ Class"
+extension = "mm"
+name_on_creation = true
+text = "#include \"___FILEBASENAME___.h\"\n\n___FILEBASENAME___::___FILEBASENAME___() {\n}\n\n___FILEBASENAME___::~___FILEBASENAME___() {\n}\n"
+
+[[templates]]
+name = "Category"
+extension = "h"
+name_on_creation = true
+text = "#import <Foundation/Foundation.h>\n\n@interface <#class#> (___FILEIDENTIFIER___)\n\n<##>\n\n@end\n"
+
+[[templates]]
+name = "Category"
+extension = "mm"
+name_on_creation = true
+text = "#import \"___FILEBASENAME___.h\"\n\n@implementation <#class#> (___FILEIDENTIFIER___)\n\n<##>\n\n@end\n"
+
+[[templates]]
+name = "Protocol"
+extension = "h"
+name_on_creation = true
+text = "#import <Foundation/Foundation.h>\n\n@protocol ___FILEBASENAME___ <NSObject>\n\n<##>\n\n@end\n"
+
+[[templates]]
+name = "Objective-C Singleton"
+extension = "h"
+name_on_creation = true
+text = "#import <Foundation/Foundation.h>\n\n@interface ___FILEBASENAME___ : NSObject\n\n+ (instancetype)sharedInstance;\n\n<##>\n\n@end\n"
+
+[[templates]]
+name = "Objective-C Singleton"
+extension = "mm"
+name_on_creation = true
+text = "#import \"___FILEBASENAME___.h\"\n\n@implementation ___FILEBASENAME___\n\n+ (instancetype)sharedInstance {\n\tstatic ___FILEBASENAME___ *shared = nil;\n\tstatic dispatch_once_t once;\n\tdispatch_once(&once, ^{\n\t\tshared = [[self alloc] init];\n\t});\n\treturn shared;\n}\n\n<##>\n\n@end\n"
+
+[[docs]]
+name = "Apple"
+type = "search"
+url = "https://developer.apple.com/search/?type=Reference&q={query}"

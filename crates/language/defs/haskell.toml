@@ -1,0 +1,58 @@
+id = "haskell"
+uuid = "ED86A00E-F6AE-4094-A125-7E6117B9D0DC"
+name = "Haskell"
+extensions = ["hs"]
+modelines = ["haskell"]
+shebangs = ["runhaskell", "runghc"]
+content_patterns = [
+  '@3 (?m)^module\s+[\w.]+(\s*\([^)]*\))?\s+where',
+  '@3 (?m)^main\s*::\s*IO\s*\(\s*\)',
+  '@2 (?m)^import\s+(qualified\s+)?(Data|Control|System|Text)\.',
+  '(?m)^\w+\s*::\s*[\w\[\]() ]+(\s*->\s*[\w\[\]() ]+)+\s*$',
+  '\bputStrLn\b',
+]
+editor_syntax = "Haskell"
+grammar = "source.haskell"
+# Haskell indents with spaces.
+tab_width = 4
+soft_tabs = true
+custom_tab_mode = true
+requires_external_components = true
+bundle_version = 1
+
+[installer]
+executable = "haskell"
+name = "Haskell"
+url = "https://www.haskell.org/"
+
+[comments]
+line = "--"
+block = ["{-", "-}"]
+
+[run]
+command = "$compiler"
+
+[run.env]
+path_append = ["$home/.ghcup/bin"]
+
+[run.compile]
+kind = "steps"
+
+[[run.compile.steps]]
+name = "Compile"
+program = "ghc"
+args = ["-o", "$output", "-outputdir", "$build_dir", "$filename", "$flags"]
+mkdirs = ["$build_dir"]
+produces = { value = "$output", must_exist = true, missing_message = "No executable was produced: there is no Main module. Run the file that contains your Main module." }
+
+[[templates]]
+name = "Main File"
+extension = "hs"
+default = true
+text = "module Main where\n\nmain :: IO ()\nmain = putStrLn \"Hello World\"<##>"
+
+[[templates]]
+name = "Module"
+extension = "hs"
+name_on_creation = true
+text = "module ___FILEBASENAME___ where\n\n<##>\n"

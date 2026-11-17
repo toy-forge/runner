@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")
+                ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "bad.py", line 2
+    return x +
+              ^
+SyntaxError: invalid syntax

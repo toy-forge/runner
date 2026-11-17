@@ -1,0 +1,34 @@
+id = "lua"
+uuid = "0C785A85-9668-4B43-AE5F-54B0D104D222"
+name = "Lua"
+extensions = ["lua"]
+shebangs = ["lua", "luajit"]
+modelines = ["lua"]
+content_patterns = [
+  '@2 (?m)^\s*local\s+function\s+\w+',
+  '@2 (?m)^\s*local\s+\w+\s*=',
+  '(?m)^\s*function\s+[\w.:]+\s*\(',
+  '(?m)^\s*end\s*$',
+  '\bipairs\s*\(|\bpairs\s*\(',
+]
+editor_syntax = "Lua"
+grammar = "source.lua"
+requires_external_components = true
+
+[comments]
+line = "--"
+block = ["--[[", "]]"]
+
+[run]
+command = "lua $filename"
+
+[errors]
+"127" = "Could not find Lua on your system. You can get it at https://www.lua.org/ or with \"brew install lua\"."
+
+[[diagnostics]]
+id = "console-text"
+name = "Console Text"
+kind = "console_text"
+update = { on_run = true }
+output_mode = "regex"
+regex = '^(\w+: )?(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+)?:? (?<message>.*)$'

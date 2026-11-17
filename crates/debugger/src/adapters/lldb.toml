@@ -1,0 +1,68 @@
+# LLDB: C, C++, Objective-C, Objective-C++, Swift, Go and Rust.
+#
+# LLDB keeps its command interpreter responsive while the inferior runs, so a
+# prompt does not mean "paused".  Stops are detected from "Process ... stopped"
+# / "stop reason = ..." / frame lines in the stream.
+id = "lldb"
+name = "LLDB"
+languages = ["c", "cpp", "objective-c", "objective-cpp", "swift", "go", "rust"]
+prompt = '(?m)\(lldb\) $'
+termination = '[Pp]rocess (?:\d+ )?exited with status (?:= )?-?(\d+)'
+crash = 'stop reason = (?:signal|EXC_[A-Z_]+)'
+message = 'Program received signal|Watchpoint .* hit|unable to attach'
+ignore = '^\s*$|no target|Locating external symbol file|Loading DWARF|Parsing symbol table'
+install_hint = "LLDB ships with the Xcode command line tools: run `xcode-select --install`."
+
+[start]
+program = "lldb"
+args = ["-s", "{init_file}"]
+pty = true
+init = "lldb"
+
+[start.env]
+TERM = "dumb"
+
+[parsers]
+kind = "lldb"
+stop_reason = '(?m)stop reason = (?<reason>[^\r\n]+)'
+stop_location = '(?m)^(?:\* )?\s*frame #(?<index>\d+): (?<pc>0x[0-9a-fA-F]+) [^`]*`(?<function>[^(\r\n]+)(?: at (?<file>[^\r\n]+):(?<line>\d+))?'
+frames = '^(?<current>\*)?\s*frame #(?<index>\d+): (?<pc>0x[0-9a-fA-F]+) [^`]*`(?<function>.*?)(?: at (?<file>.+):(?<line>\d+))?$'
+breakpoint_set = '(?m)^Breakpoint (?<id>\d+):'
+breakpoint_hit = '(?m)^\*\s+thread #(?<thread>\d+).*stop reason = breakpoint'
+variables = '^\((?<type>[^)]*)\) (?<name>.+?) = (?<value>.*)$'
+
+[flags]
+types = " -T"
+globals = " -g"
+
+[options]
+setup_commands = ["target create {qprogram}"]
+program_tty = true
+ptr_depth = 1
+default_depth = 2
+max_children = 100
+max_value_chars = 1500
+supports_pause = true
+pause_with_signal = true
+echo = "line"
+
+[commands]
+launch = "process launch -i {program_tty} -o {program_tty} -e {program_tty} -- {quoted_args}"
+continue = "process continue"
+step_over = "thread step-over"
+step_in = "thread step-in"
+step_out = "thread step-out"
+breakpoint_set = "breakpoint set -f {file_base} -l {line}{condition_clause}{temporary_clause}"
+condition_clause = " -c {qcondition}"
+temporary_clause = " -o 1"
+breakpoint_clear = "breakpoint clear -f {file_base} -l {line}"
+breakpoint_clear_all = "breakpoint delete"
+breakpoint_list = "breakpoint list"
+backtrace = "bt all"
+select_frame = "thread select {thread}\nframe select {frame}"
+variables = "frame variable -s -P {ptr_depth} --depth {depth}{types_flag}{globals_flag}"
+variables_at = "frame variable -s -P {ptr_depth} --depth {depth}{types_flag} -- {expr}"
+evaluate = "expr {expr}"
+print_description = "po {expr}"
+set_variable = "expr {path} = {value}"
+quit = "quit"

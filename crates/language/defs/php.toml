@@ -1,0 +1,66 @@
+id = "php"
+uuid = "DC909571-5FC3-4625-90FD-A59B3171788D"
+name = "PHP"
+extensions = ["php", "phtml"]
+shebangs = ["php"]
+modelines = ["php"]
+content_patterns = [
+  '@5 <\?php\b',
+  '@2 (?m)^\s*(public|private|protected)\s+(static\s+)?function\s+\w+',
+  '\$\w+\s*->\s*\w+',
+  '\becho\s+["\x27$]',
+]
+editor_syntax = "PHP"
+grammar = "text.html.php"
+debugger = "xdebug"
+requires_external_components = true
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = "php $filename"
+
+[console]
+type = "terminal"
+switchable = true
+
+[errors]
+"127" = "Could not find PHP on your system. To install the latest version of PHP using homebrew, run the command \"brew install php\" in your terminal. If you don't have homebrew installed, you can get it at https://brew.sh/"
+
+[[diagnostics]]
+id = "syntax"
+name = "PHP Syntax"
+kind = "command"
+update = { on_edit = true, on_run = true }
+options = { cancel_on_errors = true }
+output_mode = "regex"
+command = "php -l $filename"
+regex = '^(?<message>.*?)(?: in (?<file>.*?))? on line (?<line>\d+)$'
+
+[[diagnostics]]
+id = "console-text"
+name = "Console Text"
+kind = "console_text"
+update = { on_run = true }
+output_mode = "regex"
+regex = '^(?<message>.*?)(?: in (?<file>.*?))? on line (?<line>\d+)$'
+
+[[templates]]
+name = "PHP Script"
+extension = "php"
+default = true
+text = "<?php\n\t<##>\n?>"
+
+[[templates]]
+name = "Class"
+extension = "php"
+name_on_creation = true
+text = "<?php\n\nclass ___FILEBASENAME___\n{\n\t<##>\n}\n"
+
+[[docs]]
+name = "php.net"
+type = "search"
+url = "https://www.php.net/manual-lookup.php?pattern={query}"
+scope = "source.php"

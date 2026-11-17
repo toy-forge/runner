@@ -1,0 +1,9 @@
+/work/bad.js:2
+foo bar;
+    ^^^
+
+SyntaxError: Unexpected identifier 'bar'
+    at wrapSafe (node:internal/modules/cjs/loader:1900:18)
+    at checkSyntax (node:internal/main/check_syntax:88:3)
+
+Node.js v26.13.1

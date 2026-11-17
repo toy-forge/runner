@@ -1,0 +1,47 @@
+id = "perl"
+uuid = "64A50F8B-F915-49CE-BD6A-0E5305190918"
+name = "Perl"
+extensions = ["pl", "pm"]
+filenames = ["cpanfile"]
+shebangs = ["perl"]
+modelines = ["perl"]
+content_patterns = [
+  '@3 (?m)^\s*use\s+(strict|warnings)\s*;',
+  '@2 (?m)^\s*my\s+[$@%]\w+',
+  '@2 \bprint\s+["\x27$]',
+  '(?m)^\s*sub\s+\w+\s*\{',
+  '\$\w+\s*=~\s*[sm/]',
+]
+editor_syntax = "Perl"
+grammar = "source.perl"
+debugger = "perldebug"
+
+[comments]
+line = "#"
+
+[run]
+command = "perl $filename"
+
+[[diagnostics]]
+id = "console-text"
+name = "Console Text"
+kind = "console_text"
+update = { on_run = true }
+output_mode = "regex"
+regex = '^(?<message>.*?) at (?<file>.*?) line (?<line>\d+).*( near "(?<code>.*)").*$'
+
+[[diagnostics]]
+id = "syntax"
+name = "Perl Syntax"
+kind = "command"
+update = { on_edit = true, on_run = true }
+options = { cancel_on_errors = true }
+output_mode = "regex"
+command = "perl -c $filename"
+regex = '^(?<message>.*?) at (?<file>.*?) line (?<line>\d+).*( near "(?<code>.*)").*$'
+
+[[templates]]
+name = "Perl Script"
+extension = "pl"
+default = true
+text = "#!/usr/bin/env perl\n\nuse strict;\nuse warnings;\n\n<##>"

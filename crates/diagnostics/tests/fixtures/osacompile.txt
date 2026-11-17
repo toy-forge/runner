@@ -1,0 +1,1 @@
+bad.applescript:1: error: Expected expression but found end of line. (-2741)

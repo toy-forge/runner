@@ -1,0 +1,49 @@
+id = "javascript-node"
+uuid = "C871AFED-ADA2-4CDA-955A-68B11C6AA5B5"
+name = "JavaScript (Node.js)"
+extensions = ["js", "mjs", "cjs"]
+default_for = ["js", "mjs", "cjs"]
+shebangs = ["node", "nodejs"]
+modelines = ["javascript", "js", "node"]
+content_patterns = [
+  '@2 \bconsole\.(log|error|warn|info)\s*\(',
+  '@2 (?m)^\s*(const|let|var)\s+\w+\s*=\s*require\s*\(',
+  '@2 (?m)^\s*(import\s+.+\s+from\s+["\x27]|export\s+(default|const|function|class)\b)',
+  '(?m)^\s*(async\s+)?function\s*\*?\s*\w+\s*\(',
+  '\)\s*=>\s*[{(\w]',
+  '\bmodule\.exports\b|\bprocess\.(argv|env|exit)\b',
+  '(?m)^\s*(const|let)\s+\w+\s*=',
+]
+editor_syntax = "JavaScript"
+grammar = "source.js.node"
+debugger = "node"
+requires_external_components = true
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = "node $filename"
+
+[errors]
+"127" = "Could not find Node.js on your system. You can get it at https://nodejs.org"
+
+[[diagnostics]]
+id = "node-syntax"
+name = "Node Syntax"
+kind = "command"
+update = { on_edit = true, on_run = true }
+options = { cancel_on_errors = true }
+output_mode = "unix"
+command = "node --check $filename"
+
+[[docs]]
+name = "Mozilla MDN"
+type = "search"
+url = "https://developer.mozilla.org/en-US/search?topic=js&q={query}"
+
+[[docs]]
+name = "Node API"
+type = "text_find"
+url = "https://google.com/search?q={query}+site:nodejs.org%2Fapi&btnI=I"

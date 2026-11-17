@@ -1,0 +1,56 @@
+id = "shell"
+uuid = "673C976D-FCA5-4110-A78F-5751A98CC481"
+name = "Shell Script"
+extensions = ["sh", "bash", "zsh"]
+filenames = [".bashrc", ".bash_profile", ".bash_aliases", ".bash_login", ".bash_logout", ".zshrc", ".zshenv", ".zprofile", ".zlogin", ".profile"]
+shebangs = ["sh", "bash", "zsh", "dash", "ksh", "ash"]
+modelines = ["sh", "bash", "zsh", "shell"]
+content_patterns = [
+  '@2 (?m)^\s*(if\s+\[\[?\s.*\]\]?\s*;\s*then|fi\s*$|esac\s*$)',
+  '@2 (?m)^\s*(echo|export|source)\s+\S',
+  '\$\{?\w+\}?\s*',
+  '(?m)^\s*for\s+\w+\s+in\s+.*;\s*do\s*$',
+  '(?m)^\s*\w+\s*\(\)\s*\{',
+]
+editor_syntax = "Shell"
+grammar = "source.shell"
+debugger = "bashdb"
+
+[comments]
+line = "#"
+
+[run]
+command = "bash $filename"
+
+[[diagnostics]]
+id = "shellcheck"
+name = "ShellCheck"
+kind = "command"
+update = { manual = true }
+output_mode = "regex"
+command = "shellcheck -f gcc $filename"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+): ((?<error>error)|(?<warning>warning)|(?<note>note|notice)): (?<message>.*)$'
+
+[[diagnostics]]
+id = "console-text"
+name = "Console Text"
+kind = "console_text"
+update = { on_run = true }
+output_mode = "unix"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+):? (?<message>.*)$'
+
+[[diagnostics]]
+id = "syntax"
+name = "Shell Script Syntax"
+kind = "command"
+update = { on_edit = true, on_run = true }
+options = { cancel_on_errors = true }
+output_mode = "unix"
+command = "bash -n $filename"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+):? (?<message>.*)$'
+
+[[templates]]
+name = "Shell Script"
+extension = "sh"
+default = true
+text = "#!/bin/bash\n\n<##>"

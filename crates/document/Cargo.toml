@@ -1,0 +1,29 @@
+[package]
+name = "scratch-document"
+description = "Documents, files, sessions and persistence for ScratchRunner: encodings, atomic saves, xattr metadata, unsaved store, session, recent files, file watching, navigation history, close decisions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+scratch-config = { path = "../config" }
+scratch-language = { path = "../language" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+thiserror = "2"
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+encoding_rs = "0.8"
+xattr = "1"
+notify = "8"
+trash = "5"
+libc = "0.2"
+plist = "1"
+
+[dev-dependencies]
+tempfile = "3"

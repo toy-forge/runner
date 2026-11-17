@@ -1,0 +1,42 @@
+id = "ruby"
+uuid = "966788B5-C2C2-444C-AB8C-C97862C77C6C"
+name = "Ruby"
+extensions = ["rb", "rake", "gemspec", "ru"]
+filenames = ["Rakefile", "Gemfile", "Podfile", "Vagrantfile", "Guardfile", "Brewfile"]
+shebangs = ["ruby"]
+modelines = ["ruby", "rb"]
+content_patterns = [
+  '@2 (?m)^\s*def\s+\w+[?!]?(\([^)]*\))?\s*$',
+  '@2 (?m)^\s*puts\s+',
+  '@2 (?m)^\s*(require|require_relative)\s+["\x27]',
+  '(?m)^\s*(class|module)\s+[A-Z]\w*(\s*<\s*\w+)?\s*$',
+  '\.each\s+do\s*\|\w+\|',
+  '(?m)^\s*end\s*$',
+  '\battr_(accessor|reader|writer)\b',
+]
+editor_syntax = "Ruby"
+grammar = "source.ruby"
+requires_external_components = false
+
+[comments]
+line = "#"
+block = ["=begin", "=end"]
+
+[run]
+command = "ruby $filename"
+
+[[diagnostics]]
+id = "syntax"
+name = "Ruby Syntax"
+kind = "command"
+update = { on_edit = true, on_run = true }
+options = { cancel_on_errors = true }
+output_mode = "regex"
+command = "ruby -c $filename"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+)?:? (?<message>.*)$'
+
+[[templates]]
+name = "Ruby Script"
+extension = "rb"
+default = true
+text = "#!/usr/bin/env ruby\n\n<##>"

@@ -1,0 +1,2 @@
+syntax error at bad.pl line 1, near "= ;"
+bad.pl had compilation errors.

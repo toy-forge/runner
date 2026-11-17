@@ -1,0 +1,21 @@
+[package]
+name = "scratch-config"
+description = "ScratchRunner storage layout, typed preferences, the preference schema registry and CodeRunner import."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+toml_edit = "0.25"
+plist = "1"
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

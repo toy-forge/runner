@@ -1,0 +1,17 @@
+[package]
+name = "scratch-console-model"
+description = "NSH-free console model: ANSI/VT parser, bounded stream-tagged line store, filters, links, selection and search."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+regex = "1"
+thiserror = "2"
+unicode-width = "0.2"
+
+[dev-dependencies]

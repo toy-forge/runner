@@ -1,0 +1,46 @@
+# phpdbg, PHP's source-level debugger.
+#
+# PHP 8 removed the bundled phpdbg on many distributions and CodeRunner 4.6
+# itself now recommends Xdebug instead.  This adapter is best effort and
+# reports a clear "not available" status when the binary is missing.
+id = "phpdbg"
+name = "PHP (phpdbg)"
+languages = ["php"]
+prompt = '(?m)^phpdbg> $'
+termination = '(?m)^Execution Ended'
+ignore = '^\s*$'
+install_hint = "phpdbg is no longer shipped with PHP 8. Use Xdebug with PHP, or install a PHP build that includes phpdbg."
+
+[start]
+program = "phpdbg"
+args = ["-qrr", "{program}", "{program_args}"]
+pty = false
+
+[parsers]
+kind = "generic"
+stop_location = '(?m)^\[(?<file>[^\]]+):(?<line>\d+)\]'
+frames = '^(?<current>>)?\s*#(?<index>\d+)\s+(?<name>\S+)\s+(?<file>\S+):(?<line>\d+)'
+breakpoint_set = '(?m)^\[Breakpoint #(?<id>\d+)'
+
+[options]
+prompt_means_paused = true
+requires_paused_commands = true
+supports_pause = false
+pause_with_signal = false
+echo = "none"
+default_depth = 1
+max_children = 30
+
+[commands]
+launch = "run"
+continue = "continue"
+step_over = "next"
+step_in = "step"
+step_out = "finish"
+breakpoint_set = "break {file}:{line}{condition_clause}"
+condition_clause = " if {condition}"
+breakpoint_clear = "clear {file}:{line}"
+breakpoint_clear_all = "clear"
+backtrace = "backtrace"
+evaluate = "print {expr}"
+quit = "quit"

@@ -1,0 +1,130 @@
+{
+  "title": "Default",
+  "read_only": true,
+  "bindings": [
+    {
+      "key": "@~eh",
+      "command": "MainMenu/Find/Find Mode/Ignoring Whitespace"
+    },
+    {
+      "key": "@~er",
+      "command": "MainMenu/Find/Find Mode/Regular Expression"
+    },
+    {
+      "key": "@~ew",
+      "command": "MainMenu/Find/Find Mode/Word"
+    },
+    {
+      "key": "@~ep",
+      "command": "MainMenu/Find/Find Mode/Word Prefix"
+    },
+    {
+      "key": "@~es",
+      "command": "MainMenu/Find/Find Mode/Word Suffix"
+    },
+    {
+      "key": "^ ",
+      "command": "complete"
+    },
+    {
+      "key": "@\n",
+      "command": "insertNewlineBelow"
+    },
+    {
+      "key": "$\n",
+      "command": "insertNewlineCharacter"
+    },
+    {
+      "key": "~\t",
+      "command": "insertTabCharacter"
+    },
+    {
+      "key": "~@0",
+      "command": "insertZeroIndexedSelectionNumber"
+    },
+    {
+      "key": "^$",
+      "command": "moveSubwordLeftAndModifySelection"
+    },
+    {
+      "key": "^$",
+      "command": "moveSubwordRightAndModifySelection"
+    },
+    {
+      "key": "@1",
+      "command": "selectTab1"
+    },
+    {
+      "key": "@2",
+      "command": "selectTab2"
+    },
+    {
+      "key": "@3",
+      "command": "selectTab3"
+    },
+    {
+      "key": "@4",
+      "command": "selectTab4"
+    },
+    {
+      "key": "@5",
+      "command": "selectTab5"
+    },
+    {
+      "key": "@6",
+      "command": "selectTab6"
+    },
+    {
+      "key": "@7",
+      "command": "selectTab7"
+    },
+    {
+      "key": "@8",
+      "command": "selectTab8"
+    },
+    {
+      "key": "@9",
+      "command": "selectTab9"
+    },
+    {
+      "key": "@0",
+      "command": "selectTab10"
+    },
+    {
+      "key": "@~et",
+      "command": "setTextFinderMatchingType"
+    },
+    {
+      "key": "$\t",
+      "command": "shiftLeftSelection"
+    },
+    {
+      "key": "@~ei",
+      "command": "toggleTextFinderIgnoreCase"
+    },
+    {
+      "key": "@~ea",
+      "command": "toggleTextFinderWrapAround"
+    },
+    {
+      "key": "~",
+      "title": "Move to Character Backwards",
+      "compound": "[\"findTypedCharacterBackwards\", \"collapseSelectionToEnd\"]"
+    },
+    {
+      "key": "~",
+      "title": "Move to Character Forwards",
+      "compound": "[\"findTypedCharacterForwards\", \"collapseSelectionToStart\"]"
+    },
+    {
+      "key": "~$",
+      "title": "Select to Character Backwards",
+      "compound": "[\"saveSelectionWithName:\", \"tmp\", \"findTypedCharacterBackwards\", \"collapseSelectionToEnd\", \"selectToSelectionWithName:\", \"tmp\", \"setSelectionMovingEdgeToStart\"]"
+    },
+    {
+      "key": "~$",
+      "title": "Select to Character Forwards",
+      "compound": "[\"saveSelectionWithName:\", \"tmp\", \"findTypedCharacterForwards\", \"collapseSelectionToStart\", \"selectToSelectionWithName:\", \"tmp\", \"setSelectionMovingEdgeToEnd\"]"
+    }
+  ]
+}

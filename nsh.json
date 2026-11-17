@@ -1,0 +1,10 @@
+{
+  "name": "ScratchRunner",
+  "id": "com.tbxark.scratchrunner",
+  "version": "0.1.0",
+  "build": 1,
+  "appearance": "system",
+  "rust": ".",
+  "root": "ScratchRunner",
+  "theme": "ui/theme.json"
+}

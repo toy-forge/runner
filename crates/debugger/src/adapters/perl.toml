@@ -1,0 +1,46 @@
+# Perl's built-in debugger (`perl -d script.pl`).
+#
+# Best effort: breakpoints, stepping, backtraces and expression evaluation are
+# supported; the lexical-variable dump (`y`) is presented as debugger output
+# rather than a structured tree.
+id = "perl"
+name = "Perl (perl -d)"
+languages = ["perl"]
+prompt = '(?m)^\s*DB<\d+> $'
+termination = '(?m)^Debugged program terminated'
+ignore = '^\s*$'
+install_hint = "Perl ships with macOS; run `perl -d script.pl` manually if it is missing."
+
+[start]
+program = "perl"
+args = ["-d", "{program}", "{program_args}"]
+pty = true
+
+[parsers]
+kind = "perl"
+stop_location = '(?m)^.* at (?<file>.+) line (?<line>\d+)'
+frames = '^(?<current>>)?\s*\.\s*=.*$'
+reverse_frames = true
+
+[options]
+prompt_means_paused = true
+requires_paused_commands = true
+supports_pause = false
+pause_with_signal = true
+echo = "none"
+default_depth = 1
+max_children = 30
+
+[commands]
+launch = "c"
+continue = "c"
+step_over = "n"
+step_in = "s"
+step_out = "r"
+breakpoint_set = "b {line}"
+breakpoint_clear = "B {line}"
+breakpoint_clear_all = "B 0"
+backtrace = "T"
+evaluate = "p {expr}"
+set_variable = "{path} = {value}"
+quit = "q"

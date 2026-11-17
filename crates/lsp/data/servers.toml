@@ -1,0 +1,356 @@
+# Language-server catalogue.
+#
+# One entry per server. The manager starts the first command it finds on PATH or in the common
+# install locations, in the language's project root. `languages` maps ScratchRunner language ids
+# (crates/language) to the protocol's languageId. `virtual_paths`/`virtual_path` say where an
+# unsaved document lives inside its virtual workspace; `scaffold` adds the project file the
+# server needs for a single file.
+#
+# `args` may contain {root} (the workspace root) and {cache} (the app's cache directory).
+
+[[server]]
+id = "python"
+name = "Pyright"
+commands = ["pyright-langserver", "basedpyright-langserver"]
+args = ["--stdio"]
+install_hint = "Install Pyright: npm install -g pyright, or pip install pyright."
+root_markers = ["pyrightconfig.json", "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", ".git"]
+virtual_path = "main.py"
+
+[server.languages]
+python = "python"
+
+[server.settings.python]
+diagnosticMode = "openFilesOnly"
+useLibraryCodeForTypes = true
+
+[server.settings.python.analysis]
+autoImportCompletions = true
+autoSearchPaths = true
+typeCheckingMode = "basic"
+
+[[server]]
+id = "typescript"
+name = "TypeScript Language Server"
+commands = ["typescript-language-server"]
+args = ["--stdio"]
+install_hint = "Install Node.js, then npm install -g typescript typescript-language-server."
+root_markers = ["tsconfig.json", "jsconfig.json", "package.json", ".git"]
+scaffold = "tsconfig"
+
+[server.languages]
+javascript-browser = "javascript"
+javascript-jquery = "javascript"
+javascript-node = "javascript"
+typescript-browser = "typescript"
+typescript-node = "typescript"
+
+[server.virtual_paths]
+javascript-browser = "main.js"
+javascript-jquery = "main.js"
+javascript-node = "main.js"
+typescript-browser = "main.ts"
+typescript-node = "main.ts"
+
+[server.initialization_options]
+hostInfo = "ScratchRunner"
+disableAutomaticTypingAcquisition = true
+
+[server.settings.typescript.preferences]
+includePackageJsonAutoImports = "on"
+
+[server.settings.javascript.preferences]
+includePackageJsonAutoImports = "on"
+
+[[server]]
+id = "shell"
+name = "bash-language-server"
+commands = ["bash-language-server"]
+args = ["start"]
+install_hint = "Install Node.js, then npm install -g bash-language-server (and shellcheck for diagnostics)."
+root_markers = [".git", "Makefile"]
+virtual_path = "main.sh"
+
+[server.languages]
+shell = "shellscript"
+
+[server.settings.bashIde]
+globPattern = "**/*@(.sh|.inc|.bash|.command)"
+
+[[server]]
+id = "rust"
+name = "rust-analyzer"
+commands = ["rust-analyzer"]
+args = []
+install_hint = "Install the Rust toolchain and rust-analyzer: rustup component add rust-analyzer."
+root_markers = ["Cargo.toml", "rust-project.json"]
+virtual_path = "src/main.rs"
+scaffold = "cargo"
+
+[server.languages]
+rust = "rust"
+
+[server.settings.rust-analyzer]
+checkOnSave = false
+
+[server.settings.rust-analyzer.cargo]
+allFeatures = false
+
+[server.settings.rust-analyzer.procMacro]
+enable = false
+
+[[server]]
+id = "go"
+name = "gopls"
+commands = ["gopls"]
+args = []
+install_hint = "Install Go, then go install golang.org/x/tools/gopls@latest."
+root_markers = ["go.mod", "go.work", ".git"]
+virtual_path = "main.go"
+scaffold = "go"
+
+[server.languages]
+go = "go"
+
+[server.initialization_options]
+usePlaceholders = true
+completeUnimported = true
+
+[server.settings.gopls]
+usePlaceholders = true
+completeUnimported = true
+staticcheck = false
+
+[[server]]
+id = "clangd"
+name = "clangd"
+commands = ["clangd"]
+args = ["--log=error"]
+install_hint = "Install the Xcode command line tools (xcode-select --install) or LLVM (brew install llvm)."
+root_markers = ["compile_commands.json", ".clangd", "CMakeLists.txt", "Makefile", ".git"]
+search_paths = ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"]
+
+[server.languages]
+c = "c"
+cpp = "cpp"
+objective-c = "objective-c"
+objective-cpp = "objective-cpp"
+
+[server.virtual_paths]
+c = "main.c"
+cpp = "main.cpp"
+objective-c = "main.m"
+objective-cpp = "main.mm"
+
+[server.initialization_options]
+clangdFileStatus = true
+
+[[server]]
+id = "swift"
+name = "sourcekit-lsp"
+commands = ["sourcekit-lsp"]
+args = []
+install_hint = "Install Xcode or the Swift toolchain (sourcekit-lsp ships with it)."
+root_markers = ["Package.swift", ".git"]
+virtual_path = "main.swift"
+search_paths = ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"]
+
+[server.languages]
+swift = "swift"
+
+[[server]]
+id = "java"
+name = "Eclipse JDT Language Server"
+commands = ["jdtls", "jdt-language-server"]
+args = ["-data", "{cache}/jdtls"]
+install_hint = "Install a JDK and eclipse.jdt.ls (brew install jdtls), and put jdtls on PATH."
+root_markers = ["pom.xml", "build.gradle", "settings.gradle", ".project", ".git"]
+virtual_path = "Main.java"
+
+[server.languages]
+java = "java"
+
+[[server]]
+id = "php"
+name = "Intelephense"
+commands = ["intelephense"]
+args = ["--stdio"]
+install_hint = "Install Node.js, then npm install -g intelephense."
+root_markers = ["composer.json", ".git"]
+virtual_path = "main.php"
+
+[server.languages]
+php = "php"
+
+[[server]]
+id = "ruby"
+name = "Solargraph"
+commands = ["solargraph"]
+args = ["stdio"]
+install_hint = "gem install solargraph."
+root_markers = ["Gemfile", ".solargraph.yml", ".git"]
+virtual_path = "main.rb"
+
+[server.languages]
+ruby = "ruby"
+
+[[server]]
+id = "lua"
+name = "Lua Language Server"
+commands = ["lua-language-server"]
+args = []
+install_hint = "Install lua-language-server: brew install lua-language-server."
+root_markers = [".luarc.json", ".git"]
+virtual_path = "main.lua"
+
+[server.languages]
+lua = "lua"
+
+[[server]]
+id = "csharp"
+name = "OmniSharp"
+commands = ["omnisharp", "OmniSharp"]
+args = ["--languageserver"]
+install_hint = "Install the .NET SDK, then OmniSharp (or use the C# extension's server)."
+root_markers = ["*.sln", "*.csproj", "Directory.Build.props", ".git"]
+virtual_path = "Program.cs"
+
+[server.languages]
+csharp-dotnet = "csharp"
+csharp-mono = "csharp"
+csharp-script = "csharp"
+
+[server.virtual_paths]
+csharp-script = "main.csx"
+
+[[server]]
+id = "kotlin"
+name = "Kotlin Language Server"
+commands = ["kotlin-language-server"]
+args = []
+install_hint = "Install kotlin-language-server (brew install kotlin-language-server)."
+root_markers = ["build.gradle.kts", "build.gradle", "settings.gradle", ".git"]
+virtual_path = "main.kt"
+
+[server.languages]
+kotlin = "kotlin"
+
+[[server]]
+id = "html"
+name = "HTML Language Server"
+commands = ["vscode-html-language-server", "html-languageserver"]
+args = ["--stdio"]
+install_hint = "Install Node.js, then npm install -g vscode-langservers-extracted."
+root_markers = ["package.json", ".git"]
+virtual_path = "index.html"
+
+[server.languages]
+html = "html"
+
+[[server]]
+id = "css"
+name = "CSS Language Server"
+commands = ["vscode-css-language-server", "css-languageserver"]
+args = ["--stdio"]
+install_hint = "Install Node.js, then npm install -g vscode-langservers-extracted."
+root_markers = ["package.json", ".git"]
+virtual_path = "main.css"
+
+[server.languages]
+css = "css"
+
+[[server]]
+id = "json"
+name = "JSON Language Server"
+commands = ["vscode-json-language-server", "json-language-server"]
+args = ["--stdio"]
+install_hint = "Install Node.js, then npm install -g vscode-langservers-extracted."
+root_markers = ["package.json", ".git"]
+virtual_path = "main.json"
+
+[server.languages]
+json = "json"
+
+[[server]]
+id = "yaml"
+name = "YAML Language Server"
+commands = ["yaml-language-server"]
+args = ["--stdio"]
+install_hint = "Install Node.js, then npm install -g yaml-language-server."
+root_markers = [".git"]
+virtual_path = "main.yaml"
+
+[server.languages]
+yaml = "yaml"
+
+[[server]]
+id = "toml"
+name = "Taplo"
+commands = ["taplo"]
+args = ["lsp", "stdio"]
+install_hint = "Install Taplo: brew install taplo."
+root_markers = [".taplo.toml", ".git"]
+virtual_path = "main.toml"
+
+[server.languages]
+toml = "toml"
+
+[[server]]
+id = "xml"
+name = "LemMinX"
+commands = ["lemminx"]
+args = []
+install_hint = "Install LemMinX (brew install lemminx, or the VS Code XML extension's server)."
+root_markers = [".git"]
+virtual_path = "main.xml"
+
+[server.languages]
+xml = "xml"
+
+[[server]]
+id = "markdown"
+name = "Marksman"
+commands = ["marksman"]
+args = ["server"]
+install_hint = "Install Marksman: brew install marksman."
+root_markers = [".marksman.toml", ".git"]
+virtual_path = "main.md"
+
+[server.languages]
+markdown = "markdown"
+
+[[server]]
+id = "latex"
+name = "TexLab"
+commands = ["texlab"]
+args = []
+install_hint = "Install TexLab: brew install texlab."
+root_markers = [".latexmkrc", "latexmkrc", ".git"]
+virtual_path = "main.tex"
+
+[server.languages]
+latex = "latex"
+
+[[server]]
+id = "haskell"
+name = "Haskell Language Server"
+commands = ["haskell-language-server-wrapper", "haskell-language-server"]
+args = ["--lsp"]
+install_hint = "Install GHC and haskell-language-server (ghcup install hls)."
+root_markers = ["stack.yaml", "cabal.project", "*.cabal", ".git"]
+virtual_path = "Main.hs"
+
+[server.languages]
+haskell = "haskell"
+
+[[server]]
+id = "perl"
+name = "Perl Navigator"
+commands = ["perlnavigator-server", "perl-languageserver"]
+args = ["--stdio"]
+install_hint = "Install Node.js, then npm install -g perlnavigator-server."
+root_markers = ["cpanfile", "Makefile.PL", ".git"]
+virtual_path = "main.pl"
+
+[server.languages]
+perl = "perl"

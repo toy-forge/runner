@@ -1,0 +1,4 @@
+Process 34512 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+       frame #0: 0x000000010000052c t2`main at /Users/tbxark/.claude/jobs/3d64968e/tmp/debugger-work/t2.c:16
+Target 0: (t2) stopped.

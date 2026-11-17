@@ -1,0 +1,8 @@
+panic: runtime error: index out of range [5] with length 3
+
+goroutine 1 [running]:
+main.get(...)
+	/work/panic.go:3
+main.main()
+	/work/panic.go:6 +0x20
+exit status 2

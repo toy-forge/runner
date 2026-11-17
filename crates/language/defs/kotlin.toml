@@ -1,0 +1,48 @@
+id = "kotlin"
+uuid = "A9B2B786-309E-45AD-B55D-78C59418ED2A"
+name = "Kotlin"
+extensions = ["kt", "kts"]
+modelines = ["kotlin"]
+content_patterns = [
+  '@3 (?m)^\s*fun\s+main\s*\(',
+  '@2 (?m)^\s*(val|var)\s+\w+(\s*:\s*[\w<>?]+)?\s*=',
+  '@2 \bprintln\s*\(',
+  '(?m)^\s*(data\s+class|object|sealed\s+class)\s+\w+',
+  '(?m)^\s*fun\s+\w+\s*\([^)]*\)\s*(:\s*[\w<>?]+)?\s*(\{|=)',
+]
+editor_syntax = "Kotlin"
+grammar = "source.Kotlin"
+requires_external_components = true
+bundle_version = 1
+
+[installer]
+executable = "kotlinc"
+name = "the Kotlin compiler"
+url = "https://kotlinlang.org/docs/command-line.html"
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = "java -jar $compiler"
+
+[run.env]
+path_prepend = ["/opt/homebrew/opt/openjdk/bin", "/usr/local/opt/openjdk/bin"]
+path_append = ["$home/.sdkman/candidates/kotlin/current/bin", "/opt/homebrew/bin"]
+
+[run.compile]
+kind = "steps"
+
+[[run.compile.steps]]
+name = "Compile"
+program = "kotlinc"
+args = ["$filename", "-include-runtime", "-d", "${output}.jar", "$flags"]
+missing_tool = "Could not find the Kotlin compiler (kotlinc). Install it with \"brew install kotlin\" or see https://kotlinlang.org/docs/command-line.html."
+produces = { value = "${output}.jar", must_exist = true }
+
+[[templates]]
+name = "Main File"
+extension = "kt"
+default = true
+text = "fun main(args: Array<String>) {\n\t<##>\n}"

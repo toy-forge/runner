@@ -1,0 +1,58 @@
+id = "typescript-browser"
+uuid = "01AE4478-7C08-46DC-9369-946EEE11083C"
+name = "TypeScript (Browser)"
+extensions = ["ts"]
+modelines = ["typescript"]
+editor_syntax = "TypeScript"
+grammar = "source.ts"
+requires_external_components = true
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = 'echo "<script src=\"$compiler_url\"></script>"'
+
+[run.env]
+path_append = ["/opt/homebrew/bin", "/usr/local/bin"]
+
+[run.compile]
+kind = "steps"
+
+[[run.compile.steps]]
+name = "Compile"
+program = "tsc"
+args = ["--outDir", "$build_dir", "$flags", "$filename"]
+missing_tool = "Could not find the TypeScript compiler (tsc). Install it with \"npm install -g typescript\" (Node.js is available from https://nodejs.org)."
+produces = { value = "$build_dir/$stem.js", must_exist = true, missing_message = "The TypeScript compiler did not produce a JavaScript file." }
+
+[console]
+type = "web_resource"
+
+[[diagnostics]]
+id = "console-text"
+name = "Console Text"
+kind = "console_text"
+update = { on_run = true }
+output_mode = "regex"
+regex = '^(?<file>[^\s].*?)\((?<line>\d+),(?<column>\d+)\): (((?<error>error)|(?<warning>warning)|(?<note>note|notice)) ((?<messageID>TS\w+): )?)?(?<message>.*)$'
+
+[[diagnostics]]
+id = "compile"
+name = "Compile Script"
+kind = "compile_script"
+update = { on_edit = true, on_run = true }
+options = { cancel_on_errors = true }
+output_mode = "regex"
+regex = '^(?<file>[^\s].*?)\((?<line>\d+),(?<column>\d+)\): (((?<error>error)|(?<warning>warning)|(?<note>note|notice)) ((?<messageID>TS\w+): )?)?(?<message>.*)$'
+
+[[docs]]
+name = "TypeScript Tutorial"
+type = "bookmark"
+url = "https://www.typescriptlang.org/docs/handbook/typescript-in-5-minutes.html"
+
+[[docs]]
+name = "TypeScript Handbook"
+type = "bookmark"
+url = "https://www.typescriptlang.org/docs/handbook/basic-types.html"

@@ -1,0 +1,50 @@
+id = "latex"
+uuid = "1D9475F2-F52D-4F8B-AD10-257A00223011"
+name = "LaTeX"
+extensions = ["tex"]
+modelines = ["tex", "latex"]
+content_patterns = [
+  '@5 \\documentclass(\[[^\]]*\])?\{',
+  '@3 \\(begin|end)\{(document|itemize|enumerate|equation|figure|table)\}',
+  '\\(usepackage|section|subsection|textbf|emph|cite|ref|label)\b',
+]
+# NSH has no LaTeX language of its own: the app registers one named "LaTeX"
+# that reuses syntect's TeX syntax.
+editor_syntax = "LaTeX"
+syntax_hint = "tex"
+grammar = "text.tex.latex"
+requires_external_components = true
+
+[installer]
+executable = "latex"
+name = "MacTeX"
+url = "https://tug.org/mactex/"
+
+[comments]
+line = "%"
+
+[run]
+command = "echo $compiler"
+flags = "-file-line-error"
+
+[run.env]
+path_prepend = ["/Library/TeX/texbin", "/usr/texbin", "/opt/homebrew/bin"]
+
+[run.compile]
+kind = "steps"
+
+[[run.compile.steps]]
+name = "Typeset"
+program = "pdflatex"
+args = ["-interaction=nonstopmode", "-halt-on-error", "-output-directory", "$build_dir", "$flags", "$filename"]
+mkdirs = ["$build_dir"]
+produces = { value = "$build_dir/$stem.pdf", must_exist = true, missing_message = "pdflatex did not produce a PDF file." }
+
+[console]
+type = "pdf"
+
+[[templates]]
+name = "LaTeX Document"
+extension = "tex"
+default = true
+text = "\\documentclass[12pt]{article}\n\n\\begin{document}\n\t<##>\n\\end{document}"

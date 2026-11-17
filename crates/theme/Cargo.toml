@@ -1,0 +1,21 @@
+[package]
+name = "scratch-theme"
+description = "ScratchRunner colour themes: TextMate .tmTheme model, scope selectors, built-in themes and an incremental syntax-highlighting engine. No UI dependency."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The same engine and syntax set NSH's editor uses (nsh-base `highlight`), so
+# scope names and syntax lookup agree with the editor's `language` prop.
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "regex-onig"] }
+two-face = { version = "0.4.5", default-features = false, features = ["syntect-onig"] }
+plist = "1.7"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,28 @@
+id = "markdown"
+uuid = "210B9720-0015-445F-919F-8BF207AEF0FD"
+name = "Markdown"
+extensions = ["md", "markdown", "mdown", "mkd"]
+filenames = ["README", "CHANGELOG"]
+modelines = ["markdown", "md"]
+content_patterns = [
+  '@2 (?m)^#{1,6}\s+\S',
+  '@2 \[[^\]\n]+\]\([^)\n]+\)',
+  '(?m)^\s*([-*+]|\d+\.)\s+\S',
+  '(?m)^```\w*\s*$',
+  '\*\*[^*\n]+\*\*',
+]
+editor_syntax = "Markdown"
+grammar = "text.html.markdown"
+bundle_version = 1
+
+[comments]
+block = ["<!--", "-->"]
+
+# No run command: the app renders the document itself (in-process renderer)
+# into the Web console. A user can still set a run command (for example a
+# `pandoc` pipeline) to replace it.
+[console]
+type = "web"
+switchable = true
+live = true
+renderer = "markdown"

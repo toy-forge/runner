@@ -1,0 +1,11 @@
+# Editor-only: JSON is not a CodeRunner language but NSH edits it natively.
+id = "json"
+name = "JSON"
+extensions = ["json", "jsonc", "json5", "geojson", "webmanifest"]
+modelines = ["json"]
+content_patterns = [
+  '@2 (?s)\A\s*[\[{].*[\]}]\s*\z',
+  '@2 "[^"\n]+"\s*:\s*("[^"\n]*"|-?\d+(\.\d+)?|true|false|null|\{|\[)',
+]
+editor_syntax = "JSON"
+grammar = "source.json"

@@ -1,0 +1,11 @@
+LOCAL: (Item) it = {
+  (char[16]) name = "hello"
+  (Point) pos = {
+    (int) x = 1
+    (int) y = 2
+  }
+  (double) w = 2.5
+  (int *) vals = 0x000000016fdfd880 {
+    (int) *vals = 10
+  }
+}

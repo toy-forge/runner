@@ -1,0 +1,25 @@
+[package]
+name = "scratch-navigator"
+description = "Reusable macOS file navigator for ScratchRunner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nsh-core.workspace = true
+nsh-base.workspace = true
+scratch-ui-kit = { path = "../ui-kit" }
+libc.workspace = true
+notify = "8"
+thiserror = "2"
+tokio = { workspace = true }
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+nsh-engine = { version = "0.5.1", default-features = false }
+nsh-testing = { version = "0.5.1", default-features = false }

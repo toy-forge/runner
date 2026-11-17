@@ -1,0 +1,7 @@
+# Plain text: the fallback language. No run command, no highlighting.
+id = "plain-text"
+name = "Plain Text"
+extensions = ["txt", "text"]
+modelines = ["text", "plain", "plaintext"]
+editor_syntax = "Plain Text"
+grammar = "text.plain"

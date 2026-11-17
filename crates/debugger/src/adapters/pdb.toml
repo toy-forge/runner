@@ -1,0 +1,66 @@
+# Python's standard library debugger, driven through pipes.
+#
+# `python3 -u -m pdb script.py` stops at the first line of the script.  We use
+# pipes rather than a PTY: pdb then has no readline, so its transcript is clean
+# and its prompt is a reliable command boundary.  Program stdout and stdin are
+# the same pipes (that is how pdb works), which lets the session forward
+# program input while the program runs.
+id = "pdb"
+name = "Python (pdb)"
+languages = ["python"]
+prompt = '(?m)\(Pdb\) $'
+termination = 'The program finished and will be restarted'
+crash = 'Uncaught exception'
+ignore = '^\s*$'
+install_hint = "Install Python 3 (or Xcode's command line tools) to use pdb."
+
+[start]
+program = "python3"
+args = ["-u", "-m", "pdb", "{program}", "{program_args}"]
+pty = false
+
+[helpers]
+python = ["pdbvars"]
+
+[parsers]
+kind = "pdb"
+stop_reason = '(?m)^--(?<reason>Call|Return)--$'
+stop_location = '(?m)^> (?<file>.+)\((?<line>\d+)\)(?<function>[^(]*)\(\)(?:->(?<ret>.*))?$'
+frames = '(?m)^(?<current>> |  )(?<file>.+)\((?<line>\d+)\)(?<name>[^(]*)\(\)(?:->(?<ret>.*))?$'
+breakpoint_set = '(?m)^Breakpoint (?<id>\d+) at'
+breakpoint_hit = '(?m)^Breakpoint (?<id>\d+),'
+variables_marker = "SCRATCHDBG:"
+reverse_frames = true
+hide_frames = ["bdb.py", "pdb.py", "<string>", "python3.15/", "Python.framework"]
+
+[options]
+prompt_means_paused = true
+requires_paused_commands = true
+supports_pause = true
+pause_with_signal = true
+default_depth = 2
+max_children = 100
+max_value_chars = 1500
+echo = "none"
+
+[commands]
+launch = "continue"
+continue = "continue"
+step_over = "next"
+step_in = "step"
+step_out = "return"
+breakpoint_set = "break {file_base}:{line}{condition_clause}"
+condition_clause = ", {condition}"
+breakpoint_set_temporary = "tbreak {file_base}:{line}{condition_clause}"
+breakpoint_clear = "clear {file_base}:{line}"
+breakpoint_clear_all = "clear"
+breakpoint_list = "break"
+backtrace = "where"
+frame_up = "up {count}"
+frame_down = "down {count}"
+variables = "!__import__('scratchdbg_pdbvars').emit(locals(), globals(), {depth}, {show_all}, {max_children})"
+variables_at = "!__import__('scratchdbg_pdbvars').emit_at({qexpr}, locals(), globals(), {depth}, {max_children})"
+evaluate = "p {expr}"
+print_description = "pp {expr}"
+set_variable = "!{path} = {value}"
+quit = "quit"

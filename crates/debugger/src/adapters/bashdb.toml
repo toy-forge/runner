@@ -1,0 +1,50 @@
+# bashdb, a source-level debugger for shell scripts.
+#
+# Not installed on most Macs; the session reports it as "not available" with
+# the Homebrew hint instead of failing at run time.  bashdb shares its tty
+# with the debugged script, so a PTY is used for both.
+id = "bashdb"
+name = "Bash (bashdb)"
+languages = ["shell"]
+prompt = '(?m)^bashdb> $'
+termination = '(?m)^Debugged program terminated(?: normally| with code (\d+))?'
+ignore = '^\s*$'
+install_hint = "Install bashdb with Homebrew: brew install bashdb"
+
+[start]
+program = "bashdb"
+args = ["--quiet", "{program}", "{program_args}"]
+pty = true
+
+[parsers]
+kind = "bashdb"
+stop_location = '(?m)^\(?.*\)?:\s*(?<line>\d+):'
+frames = '^\s*->\s*\[\s*(?<index>\d+)\] (?<name>.+)$'
+breakpoint_set = '(?m)^Breakpoint (?<id>\d+)'
+reverse_frames = true
+
+[options]
+prompt_means_paused = true
+requires_paused_commands = true
+supports_pause = false
+pause_with_signal = true
+echo = "none"
+default_depth = 1
+max_children = 50
+
+[commands]
+launch = "continue"
+continue = "continue"
+step_over = "next"
+step_in = "step"
+step_out = "finish"
+breakpoint_set = "break {file_base}:{line}"
+breakpoint_clear = "clear {file_base}:{line}"
+breakpoint_clear_all = "clear"
+backtrace = "backtrace"
+frame_up = "up {count}"
+frame_down = "down {count}"
+variables = "eval declare -p"
+evaluate = "print {expr}"
+set_variable = "eval {path}={value}"
+quit = "quit"

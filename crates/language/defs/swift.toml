@@ -1,0 +1,79 @@
+id = "swift"
+uuid = "8EB61A41-AAC1-4C23-B110-2E2C8B5E1162"
+name = "Swift"
+extensions = ["swift"]
+shebangs = ["swift"]
+modelines = ["swift"]
+content_patterns = [
+  '@2 (?m)^\s*import\s+(Foundation|SwiftUI|AppKit|UIKit|Cocoa|Combine)\b',
+  '@2 (?m)^\s*(public\s+|private\s+|final\s+)*func\s+\w+\s*\([^)]*\)\s*(throws\s*)?->\s*\w+',
+  '(?m)^\s*(let|var)\s+\w+\s*:\s*[A-Z]\w*(\?|!)?\s*(=|$)',
+  '\bguard\s+let\b',
+  '(?m)^\s*(struct|enum|protocol|extension)\s+\w+',
+]
+editor_syntax = "Swift"
+grammar = "source.swift"
+debugger = "lldb"
+requires_external_components = true
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = "$compiler"
+
+[run.compile]
+kind = "steps"
+
+[[run.compile.bindings]]
+name = "sources"
+source = { kind = "swift_sources" }
+
+[[run.compile.steps]]
+name = "Compile"
+via = ["xcrun", "-sdk", "macosx"]
+program = "swiftc"
+args = ["-o", "$output", "$sources", "$flags"]
+debug_args = ["-g"]
+missing_tool = "Could not find the Swift compiler. Install Xcode or Apple's command line developer tools by running \"xcode-select --install\" in Terminal."
+produces = { value = "$output" }
+
+[[diagnostics]]
+id = "compile"
+name = "Compile Script"
+kind = "compile_script"
+update = { on_edit = true, on_run = true }
+options = { custom_flags = true, add_to_existing = true, cancel_on_errors = true }
+output_mode = "unix"
+flags = "-typecheck"
+
+[[diagnostics]]
+id = "console-text"
+name = "Console Text"
+kind = "console_text"
+update = { on_run = true }
+output_mode = "unix"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+):? (?<message>.*)$'
+
+[[templates]]
+name = "Class"
+extension = "swift"
+name_on_creation = true
+text = "import Foundation\n\nclass ___FILEBASENAME___ {\n\t<##>\n}\n"
+
+[[templates]]
+name = "Class (NSObject)"
+extension = "swift"
+name_on_creation = true
+text = "import Foundation\n\nclass ___FILEBASENAME___: NSObject {\n\t<##>\n}\n"
+
+[[docs]]
+name = "Apple"
+type = "search"
+url = "https://developer.apple.com/search/?type=Reference&q={query}"
+
+[[docs]]
+name = "Swift Basics"
+type = "bookmark"
+url = "https://docs.swift.org/swift-book/documentation/the-swift-programming-language/thebasics/"

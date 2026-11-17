@@ -1,0 +1,71 @@
+id = "python"
+uuid = "3CB7EE93-841D-41F6-96EE-4C8E8C6927E4"
+name = "Python"
+extensions = ["py", "pyw"]
+filenames = ["SConstruct", "SConscript"]
+shebangs = ["python"]
+modelines = ["python", "py"]
+content_patterns = [
+  '@3 (?m)^if\s+__name__\s*==\s*["\x27]__main__["\x27]\s*:',
+  '@2 (?m)^\s*def\s+\w+\s*\([^)]*\)\s*(->\s*[\w\[\], .|]+)?\s*:\s*$',
+  '@2 (?m)^\s*(from\s+[\w.]+\s+import\s+|import\s+\w+(\.\w+)*\s*$)',
+  '(?m)^\s*(class\s+\w+(\([^)]*\))?\s*:|elif\s+.+:|for\s+\w+\s+in\s+.+:|with\s+.+\s+as\s+\w+\s*:)\s*$',
+  '\b(print|input|len|range|str|int|float|list|dict|set|tuple|sum|min|max|abs|open|type|isinstance|enumerate|zip|sorted|map|filter|repr)\s*\(',
+  '@2 (?m)^\s*[A-Za-z_][\w]*\s*=\s*[A-Za-z_][\w.]*\s*\(',
+  '\bself\.\w+',
+]
+editor_syntax = "Python"
+grammar = "source.python"
+debugger = "pdb"
+requires_external_components = true
+
+[installer]
+executable = "python3"
+name = "Python 3"
+url = "https://www.python.org/"
+
+[comments]
+line = "#"
+
+[run]
+command = "python3 $filename"
+
+[[diagnostics]]
+id = "syntax"
+name = "Python Syntax"
+kind = "command"
+update = { on_edit = true }
+output_mode = "regex"
+command = "python3 -c 'import sys; compile(open(sys.argv[1], \"r\").read(), sys.argv[1], \"exec\")' $filename"
+regex = '(?s)File "(?<file>[^"]+)", line (?<line>\d+)\n(?:[^\n]*\n)*?(?<message>(?<error>\w*Error): [^\n]*)'
+
+# Highlights and links the frames of a traceback in the console.
+[[diagnostics]]
+id = "console-text"
+name = "Console Text"
+kind = "console_highlight"
+update = { on_run = true }
+output_mode = "regex"
+regex = '(?m)^\s*File "(?<file>[^"]+)", line (?<line>\d+)'
+
+[[templates]]
+name = "Python File"
+extension = "py"
+default = true
+text = "#!/usr/bin/env python3\n\n<##>"
+
+[[templates]]
+name = "Class"
+extension = "py"
+name_on_creation = true
+text = "class ___FILEBASENAME___:\n\tdef __init__(self):\n\t\t<##>\n"
+
+[[docs]]
+name = "Python"
+type = "search"
+url = "https://docs.python.org/3/search.html?q={query}"
+
+[[docs]]
+name = "Python Tutorial"
+type = "bookmark"
+url = "https://docs.python.org/3/tutorial/index.html"

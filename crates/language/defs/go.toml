@@ -1,0 +1,72 @@
+id = "go"
+uuid = "31392064-DD21-4114-9BEB-7FA18B503CD8"
+name = "Go"
+extensions = ["go"]
+modelines = ["go", "golang"]
+content_patterns = [
+  '@3 (?m)^package\s+main\s*$',
+  '@2 (?m)^func\s+(\(\w+\s+\*?\w+\)\s*)?\w+\s*\(',
+  '@2 \bfmt\.(Print|Println|Printf|Sprintf|Errorf)\(',
+  '(?m)^import\s+(\(|")',
+  '\w+\s*:=\s*',
+]
+editor_syntax = "Go"
+grammar = "source.go"
+debugger = "lldb"
+requires_external_components = true
+
+[installer]
+executable = "go"
+name = "the Go compiler"
+url = "https://go.dev/"
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = "$compiler"
+
+[run.env]
+path_append = ["/usr/local/go/bin", "/opt/homebrew/bin"]
+
+[run.compile]
+kind = "steps"
+
+# Inside a module (go.mod here or in a parent) build the directory's package,
+# like `go build`; otherwise build the single file.
+[[run.compile.steps]]
+name = "Build package"
+program = "go"
+args = ["build", "-o", "$output", "$flags"]
+debug_args = ["-gcflags", "-N -l"]
+when = [{ file_exists_up = "go.mod" }]
+produces = { value = "$output" }
+
+[[run.compile.steps]]
+name = "Build"
+program = "go"
+args = ["build", "-o", "$output", "$flags", "$filename"]
+debug_args = ["-gcflags", "-N -l"]
+unless = [{ file_exists_up = "go.mod" }]
+produces = { value = "$output" }
+
+[[diagnostics]]
+id = "compile"
+name = "Compile Script"
+kind = "compile_script"
+update = { on_edit = true, on_run = true }
+options = { cancel_on_errors = true }
+output_mode = "unix"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+):? (?<message>.*)$'
+
+[[templates]]
+name = "Main File"
+extension = "go"
+default = true
+text = "package main\n\nfunc main() {\n\t<##>\n}"
+
+[[docs]]
+name = "Go Packages"
+type = "search"
+url = "https://pkg.go.dev/search?q={query}"

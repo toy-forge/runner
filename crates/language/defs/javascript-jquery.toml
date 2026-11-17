@@ -1,0 +1,43 @@
+id = "javascript-jquery"
+uuid = "B2BAD283-A431-45E6-B53C-8FCE8081C0B3"
+name = "JavaScript (jQuery)"
+extensions = ["js"]
+modelines = ["jquery"]
+content_patterns = [
+  '@3 \$\(\s*(document|window|["\x27][^"\x27]+["\x27])\s*\)\s*\.\s*\w+',
+  '@2 \$\(document\)\.ready\b',
+  '\$\.(ajax|get|post|each)\s*\(',
+]
+editor_syntax = "JavaScript"
+grammar = "source.js.jquery"
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+# jQuery is loaded from the CDN; an app may point this at a bundled copy
+# ("$scripts_dir/jquery.min.js") for offline use.
+[run]
+command = 'echo "<script src=\"https://code.jquery.com/jquery-3.7.1.min.js\"></script><script src=\"$file_url\"></script>"'
+
+[console]
+type = "web_resource"
+
+[[diagnostics]]
+id = "js-syntax"
+name = "JS Syntax"
+kind = "command"
+update = { on_edit = true, on_run = true }
+output_mode = "unix"
+command = "node --check $filename"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+):? (?<message>.*)$'
+
+[[docs]]
+name = "jQuery API"
+type = "search"
+url = "https://api.jquery.com/?s={query}"
+
+[[docs]]
+name = "Mozilla MDN"
+type = "search"
+url = "https://developer.mozilla.org/en-US/search?topic=api&topic=js&q={query}"

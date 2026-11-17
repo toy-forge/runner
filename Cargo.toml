@@ -1,0 +1,83 @@
+[package]
+name = "scratchrunner"
+description = "ScratchRunner: a native macOS scratchpad for writing and running code."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+env_logger.workspace = true
+scratch-commands = { path = "crates/commands" }
+scratch-config.workspace = true
+scratch-debugger.workspace = true
+scratch-document.workspace = true
+scratch-language = { path = "crates/language" }
+scratch-runner.workspace = true
+scratch-ui-kit = { path = "crates/ui-kit" }
+scratch-console-model = { path = "crates/console-model" }
+scratch-lsp.workspace = true
+scratch-navigator = { path = "crates/navigator" }
+scratch-search = { path = "crates/search" }
+scratch-theme = { path = "crates/theme" }
+scratch-diagnostics = { path = "crates/diagnostics" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+nsh-core.workspace = true
+nsh-base.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nsh-platform-macos.workspace = true
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+publish = false
+
+[workspace.lints.rust]
+unused = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# NSH is pinned to the crates.io release the nsh CLI builds against (docs/development.md, "NSH pin").
+[workspace.dependencies]
+nsh-core = { version = "0.5.1" }
+nsh-base = { version = "0.5.1", features = ["editor"] }
+nsh-platform-macos = { version = "0.5.1" }
+
+scratch-config = { path = "crates/config" }
+scratch-debugger = { path = "crates/debugger" }
+scratch-document = { path = "crates/document" }
+scratch-runner = { path = "crates/runner" }
+scratch-lsp = { path = "crates/lsp" }
+
+env_logger = "0.11"
+log = "0.4"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "io-util", "sync", "time", "fs"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }

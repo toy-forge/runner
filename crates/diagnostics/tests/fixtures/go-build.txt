@@ -1,0 +1,3 @@
+# command-line-arguments
+./main.go:6:6: declared and not used: y
+./main.go:7:14: undefined: x

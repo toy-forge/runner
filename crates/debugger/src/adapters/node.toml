@@ -1,0 +1,51 @@
+# Node.js text-mode inspector: `node inspect script.js`.
+#
+# Best effort.  Node's REPL reprints the prompt for every typed character and
+# mixes program output (prefixed with "< ") into the same stream; the session
+# strips both.  Node's inspector has no portable variable-tree command, so
+# variables are reported as unsupported while expression evaluation, stepping
+# and breakpoints work.
+id = "node"
+name = "Node.js (inspect)"
+languages = ["javascript-node"]
+prompt = '(?m)debug> $'
+termination = 'Waiting for the debugger to disconnect'
+ignore = 'Debugger listening on|For help, see|Debugger attached|^\s*$'
+install_hint = "Install Node.js from https://nodejs.org to debug JavaScript."
+
+[start]
+program = "node"
+args = ["inspect", "{program}", "{program_args}"]
+pty = true
+
+[parsers]
+kind = "node"
+stop_location = '(?m)^(?:break|step|pause) in (?<file>[^:\r\n]+):(?<line>\d+)$'
+frames = '(?m)^#(?<index>\d+) (?<function>.*?) (?<file>[^\s:]+):(?<line>\d+):(?<col>\d+)$'
+breakpoint_set = '(?m)^debug> '
+
+[options]
+prompt_means_paused = false
+requires_paused_commands = true
+supports_pause = true
+pause_with_signal = false
+echo = "prefix"
+echo_prefix = "debug> "
+program_prefix = "< "
+default_depth = 2
+max_children = 50
+
+[commands]
+launch = "cont"
+continue = "cont"
+pause = "pause"
+step_over = "next"
+step_in = "step"
+step_out = "out"
+breakpoint_set = "setBreakpoint('{file_base}', {line})"
+breakpoint_clear = "clearBreakpoint('{file_base}', {line})"
+breakpoint_clear_all = "clearAllBreakpoints()"
+backtrace = "bt"
+evaluate = "exec {expr}"
+set_variable = "exec {path} = {value}"
+quit = ""

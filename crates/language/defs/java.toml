@@ -1,0 +1,94 @@
+id = "java"
+uuid = "123A91F7-DC75-4DA4-AC58-2D9FBC35F8C5"
+name = "Java"
+extensions = ["java"]
+modelines = ["java"]
+content_patterns = [
+  '@3 \bpublic\s+static\s+void\s+main\s*\(\s*String',
+  '@2 \bSystem\.(out|err)\.print',
+  '@2 (?m)^\s*(public\s+|final\s+|abstract\s+)*(class|interface|enum|record)\s+[A-Z]\w*',
+  '(?m)^\s*import\s+java(x)?\.',
+  '(?m)^\s*package\s+[\w.]+;',
+]
+editor_syntax = "Java"
+grammar = "source.java"
+debugger = "jdb"
+requires_external_components = true
+# NSStringEncoding values are mapped to charset names for javac's -encoding.
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = "java -cp $compiler $main_class"
+
+[run.env]
+path_prepend = ["/opt/homebrew/opt/openjdk/bin", "/usr/local/opt/openjdk/bin"]
+
+[run.compile]
+kind = "steps"
+
+[[run.compile.bindings]]
+name = "main_class"
+source = { kind = "java_main_class" }
+
+[[run.compile.bindings]]
+name = "java_root"
+source = { kind = "java_source_root" }
+
+[[run.compile.bindings]]
+name = "java_file"
+source = { kind = "java_source_relative" }
+
+[[run.compile.steps]]
+name = "Compile"
+program = "javac"
+cwd = "$java_root"
+args = ["-encoding", "$encoding_name", "-sourcepath", "$java_root", "-d", "$build_dir", "$flags", "$java_file"]
+debug_args = ["-g"]
+mkdirs = ["$build_dir"]
+missing_tool = "Could not find a Java Development Kit (javac). Install one, for example with \"brew install openjdk\", from https://adoptium.net/ or from https://www.oracle.com/java/."
+produces = { value = "$build_dir" }
+
+[[diagnostics]]
+id = "compile"
+name = "Compile Script"
+kind = "compile_script"
+update = { on_edit = true, on_run = true }
+output_mode = "unix"
+regex = '^(?<file>[^\s].*?):(?<line>\d+):(?<column>\d+):? (?<message>.*)$'
+
+[[templates]]
+name = "Main File"
+extension = "java"
+default = true
+text = "class Untitled {\n\tpublic static void main(String[] args) {\n\t\t<##>\n\t}\n}"
+
+[[templates]]
+name = "Class"
+extension = "java"
+name_on_creation = true
+text = "// ___FILENAME___\n// Created by ___FULLUSERNAME___ on ___DATE___.\n\npublic class ___FILEBASENAME___ {\n\t<##>\n}\n"
+
+[[templates]]
+name = "Interface"
+extension = "java"
+name_on_creation = true
+text = "// ___FILENAME___\n// Created by ___FULLUSERNAME___ on ___DATE___.\n\npublic interface ___FILEBASENAME___ {\n\t<##>\n}\n"
+
+[[templates]]
+name = "Enum"
+extension = "java"
+name_on_creation = true
+text = "// ___FILENAME___\n// Created by ___FULLUSERNAME___ on ___DATE___.\n\npublic enum ___FILEBASENAME___ {\n\t<##>\n}\n"
+
+[[docs]]
+name = "Java SE 21"
+type = "search"
+url = "https://docs.oracle.com/en/java/javase/21/docs/api/index.html"
+
+[[docs]]
+name = "Java SE 17"
+type = "search"
+url = "https://docs.oracle.com/en/java/javase/17/docs/api/index.html"

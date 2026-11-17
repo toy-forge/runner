@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/work/run.py", line 7, in <module>
+    main()
+    ~~~~^^
+  File "/work/run.py", line 5, in main
+    helper(0)
+    ~~~~~~^^^
+  File "/work/run.py", line 2, in helper
+    return 1 / x
+           ~~^~~
+ZeroDivisionError: division by zero

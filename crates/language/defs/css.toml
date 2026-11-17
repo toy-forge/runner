@@ -1,0 +1,32 @@
+id = "css"
+uuid = "B78D595F-94B7-470B-BE66-C3BF31DE4E4F"
+name = "CSS"
+extensions = ["css"]
+modelines = ["css"]
+content_patterns = [
+  '@3 (?m)^\s*[.#]?[\w-]+(\s*[>+~,]\s*[.#]?[\w-]+)*\s*\{[^}]*\b[a-z-]+\s*:\s*[^;}]+;',
+  '@2 (?m)^\s*@(media|import|font-face|keyframes)\b',
+  '(?m)^\s*(color|background(-color)?|margin|padding|font-size|display)\s*:\s*[^;]+;',
+]
+editor_syntax = "CSS"
+grammar = "source.css"
+
+[comments]
+block = ["/*", "*/"]
+
+# The stylesheet is injected into the host page (a Web Resource console).
+[run]
+command = 'echo "<style>"; cat $filename; echo "</style>"'
+
+[console]
+type = "web_resource"
+
+[[docs]]
+name = "Mozilla MDN"
+type = "search"
+url = "https://developer.mozilla.org/en-US/search?topic=css&q={query}"
+
+[[docs]]
+name = "CSS Selectors Reference"
+type = "bookmark"
+url = "https://www.w3.org/TR/selectors-3/#selectors"

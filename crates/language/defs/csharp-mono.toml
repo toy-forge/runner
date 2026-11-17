@@ -1,0 +1,57 @@
+id = "csharp-mono"
+uuid = "9A37339F-AB15-4DDD-BF09-4C54AB627DA4"
+name = "C# (Mono)"
+extensions = ["cs"]
+modelines = ["csharp"]
+editor_syntax = "C#"
+grammar = "source.cs"
+requires_external_components = true
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+[run]
+command = "mono $compiler"
+
+[run.env]
+path_prepend = ["/Library/Frameworks/Mono.framework/Versions/Current/bin", "/opt/homebrew/bin"]
+
+[run.compile]
+kind = "steps"
+
+[[run.compile.steps]]
+name = "Compile"
+program = "mcs"
+args = ["$filename", "-out:${output}.exe", "$flags"]
+missing_tool = "Could not find the Mono C# compiler (mcs). Install Mono from https://www.mono-project.com/ or with \"brew install mono\"."
+produces = { value = "${output}.exe", must_exist = true }
+
+[[diagnostics]]
+id = "console-text"
+name = "Console Text"
+kind = "console_text"
+update = { on_run = true }
+output_mode = "regex"
+regex = '^(?<file>[^\s].*?)\((?<line>\d+),(?<column>\d+)\): (((?<error>error)|(?<warning>warning)|(?<note>note|notice)) (?<messageID>\w+\d+): ?)?(?<message>.*)$'
+
+[[diagnostics]]
+id = "syntax"
+name = "C# Syntax"
+kind = "compile_script"
+update = { on_edit = true, on_run = true }
+options = { add_to_existing = true, cancel_on_errors = true }
+output_mode = "regex"
+regex = '^(?<file>[^\s].*?)\((?<line>\d+),(?<column>\d+)\): (((?<error>error)|(?<warning>warning)|(?<note>note|notice)) (?<messageID>\w+\d+): ?)?(?<message>.*)$'
+
+[[templates]]
+name = "Main File"
+extension = "cs"
+default = true
+text = "using System;\n\nclass Untitled\n{\n\tstatic void Main(string[] args)\n\t{\n\t\t<##>\n\t}\n}"
+
+[[templates]]
+name = "Class"
+extension = "cs"
+name_on_creation = true
+text = "using System;\n\nclass ___FILEBASENAME___\n{\n\t<##>\n}\n"

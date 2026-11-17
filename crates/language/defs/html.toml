@@ -1,0 +1,44 @@
+id = "html"
+uuid = "FFE53747-E6FA-41A9-AD88-B6E70A7D2DBE"
+name = "HTML"
+extensions = ["html", "htm", "shtml", "xhtml", "tmpl", "tpl"]
+modelines = ["html"]
+content_patterns = [
+  '@5 (?i)<!doctype\s+html',
+  '@3 (?i)<html[\s>]',
+  '@2 (?i)<(head|body|div|span|script|style|p|a\s+href)\b[^>]*>',
+]
+editor_syntax = "HTML"
+grammar = "text.html.basic"
+
+[comments]
+block = ["<!--", "-->"]
+
+# The file is the page.
+[run]
+command = "cat $filename"
+
+[console]
+type = "web"
+live = true
+
+[[templates]]
+name = "HTML 5 Page Structure"
+extension = "html"
+default = true
+text = "<!DOCTYPE html>\n<html>\n\t<head>\n\t\t<meta charset=\"UTF-8\">\n\t\t<title></title>\n\t</head>\n\t<body>\n\t\t<##>\n\t</body>\n</html>"
+
+[[templates]]
+name = "XHTML 1.0 Strict Page Structure"
+extension = "html"
+text = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en\" lang=\"en\">\n\t<head>\n\t\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n\t\t<title></title>\n\t</head>\n\t<body>\n\t\t<##>\n\t</body>\n</html>"
+
+[[templates]]
+name = "HTML 4.01 Strict Page Structure"
+extension = "html"
+text = "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \"http://www.w3.org/TR/html4/strict.dtd\">\n<html>\n\t<head>\n\t\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\">\n\t\t<title></title>\n\t</head>\n\t<body>\n\t\t<##>\n\t</body>\n</html>"
+
+[[docs]]
+name = "Mozilla MDN"
+type = "search"
+url = "https://developer.mozilla.org/en-US/search?topic=html&q={query}"

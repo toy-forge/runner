@@ -1,0 +1,7 @@
+LOCAL: (int) n = 3
+LOCAL: (Point) p = {
+  (int) x = 1
+  (int) y = 2
+}
+LOCAL: (int) total = 4
+LOCAL: (char[64]) line = "hello"

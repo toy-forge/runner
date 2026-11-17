@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "skills": {
+    "nsh": {
+      "source": "longbridge/nsh",
+      "sourceType": "github",
+      "skillPath": "skills/nsh/SKILL.md",
+      "computedHash": "178c5cf0ddccc5cf5a594d94aba065c984c6c61806ef71b72f915c8891b4fdd5"
+    },
+    "nsh-design-guides": {
+      "source": "longbridge/nsh",
+      "sourceType": "github",
+      "skillPath": "skills/nsh-design-guides/SKILL.md",
+      "computedHash": "0e201dd662146d974ba88b7f3a7ce4260e3e69400aa01e30fe4d39e76da8d34f"
+    },
+    "oil-ui": {
+      "source": "oil-oil/oil-ui",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "6050020d38c81ea7b86f558187cd9c268488d70ed25510539c801bb7c22629a2"
+    }
+  }
+}

@@ -1,0 +1,36 @@
+id = "javascript-browser"
+uuid = "BDBEA569-54FA-4E18-9E33-35F90DDECE1A"
+name = "JavaScript (Browser)"
+extensions = ["js"]
+modelines = ["javascript"]
+content_patterns = [
+  '@3 \b(document|window)\.(getElementById|querySelector(All)?|addEventListener|location)\b',
+  '@2 \b(alert|prompt|confirm)\s*\(',
+  '\blocalStorage\b|\bnavigator\.\w+',
+]
+editor_syntax = "JavaScript"
+grammar = "source.js"
+
+[comments]
+line = "//"
+block = ["/*", "*/"]
+
+# The page (a Web Resource console) loads the script from the file.
+[run]
+command = 'echo "<script src=\"$file_url\"></script>"'
+
+[console]
+type = "web_resource"
+
+[[diagnostics]]
+id = "js-syntax"
+name = "JS Syntax"
+kind = "command"
+update = { on_edit = true, on_run = true }
+output_mode = "unix"
+command = "node --check $filename"
+
+[[docs]]
+name = "Mozilla MDN"
+type = "search"
+url = "https://developer.mozilla.org/en-US/search?topic=api&topic=js&q={query}"

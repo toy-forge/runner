@@ -1,0 +1,3 @@
+#0 (anonymous) t.js:3:13
+#1 (anonymous) node:internal/modules/cjs/loader:1965:13
+#2 wrapModuleLoad node:internal/modules/run_main:171:4
