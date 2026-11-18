@@ -26,19 +26,69 @@ pub struct SavedDocument {
     pub diagnostics: Option<scratch_diagnostics::settings::DocumentDiagnosticsData>,
 }
 
+fn default_true() -> bool { true }
+fn default_sidebar_width() -> f32 { 240.0 }
+fn default_console_height() -> f32 { 200.0 }
+fn default_console_width() -> f32 { 360.0 }
+fn default_docs_width() -> f32 { 300.0 }
+
+/// Saved window frame in points.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SavedBounds {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// A complete, self-contained workbench snapshot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub version: u32,
     pub documents: Vec<SavedDocument>,
     pub active: Option<DocumentId>,
+    #[serde(default = "default_console_height")]
     pub console_height: f32,
+    #[serde(default)]
     pub console_visible: bool,
+    #[serde(default)]
+    pub console_right: bool,
+    #[serde(default = "default_console_width")]
+    pub console_width: f32,
+    #[serde(default = "default_true")]
+    pub sidebar_visible: bool,
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: f32,
+    #[serde(default)]
+    pub docs_visible: bool,
+    #[serde(default = "default_docs_width")]
+    pub docs_width: f32,
+    #[serde(default = "default_true")]
+    pub toolbar_visible: bool,
+    #[serde(default = "default_true")]
+    pub tab_bar_visible: bool,
+    #[serde(default)]
+    pub window_bounds: Option<SavedBounds>,
 }
 
 impl Default for Snapshot {
     fn default() -> Self {
-        Self { version: VERSION, documents: Vec::new(), active: None, console_height: 200.0, console_visible: false }
+        Self {
+            version: VERSION,
+            documents: Vec::new(),
+            active: None,
+            console_height: default_console_height(),
+            console_visible: false,
+            console_right: false,
+            console_width: default_console_width(),
+            sidebar_visible: true,
+            sidebar_width: default_sidebar_width(),
+            docs_visible: false,
+            docs_width: default_docs_width(),
+            toolbar_visible: true,
+            tab_bar_visible: true,
+            window_bounds: None,
+        }
     }
 }
 

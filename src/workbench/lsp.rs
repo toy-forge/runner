@@ -16,27 +16,31 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use nsh_base::editor::{
-    EditorCompletionAcceptEvent, EditorEdit, EditorCompletionItem, EditorCompletionKind,
-    EditorCompletionRequest, EditorCompletionTrigger,
+    EditorCodeActionRequest, EditorCompletionAcceptEvent, EditorCompletionItem,
+    EditorCompletionKind, EditorCompletionRequest, EditorCompletionTrigger,
+    EditorDefinitionRequest, EditorDefinitionTrigger, EditorEdit,
 };
 use nsh_base::text_view::PartStyle;
 use nsh_base::{
     EditorDiagnostic, EditorDiagnosticCodeDescription, EditorDiagnosticRelatedInformation,
     EditorDiagnosticSeverity, EditorDiagnosticTag, EditorElement, EditorHoverEvent,
-    EditorLocation, EditorPosition, EditorRange, EditorStyles, PopoverEvent, popover,
+    EditorLocation, EditorPosition, EditorRange, EditorSelection, EditorStyles, PopoverEvent,
+    input, popover,
 };
 use nsh_core::element::{Style, StyleRefinement};
+use nsh_core::element::desktop::{MenuItem, popup_menu, popup_menu_at};
 use nsh_core::overlay::Placement;
 use nsh_core::PointerEvents;
 use scratch_ui_kit::prelude::*;
 use scratch_document::DocumentId;
 use scratch_lsp::{
-    Block, CompletionItem, CompletionKind, CompletionTrigger, Diagnostic, InsertFormat, Manager,
-    ManagerConfig, ManagerEvent, MessageLevel, Position, Range, RichText, ServerCatalog,
-    ServerStatus, Severity, TextEdit,
+    AppliedEdit, Block, CodeAction, CompletionItem, CompletionKind, CompletionTrigger,
+    Diagnostic, FormattingOptions, InsertFormat, Location, Manager, ManagerConfig, ManagerEvent,
+    MessageLevel, Position, Range, RichText, ServerCatalog, ServerStatus, Severity, TextEdit,
 };
 use tokio::sync::{mpsc, oneshot};
 
+use super::preferences;
 use super::state::{self, with};
 
 /// How long typing pauses before the server hears the text.
@@ -55,6 +59,8 @@ struct Doc {
     sync: SyncState,
     /// The last completion list, for the additional edits of an accepted item.
     completions: Vec<CompletionItem>,
+    /// Raw LSP diagnostics from the last publishDiagnostics notification.
+    diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Default)]
@@ -65,6 +71,8 @@ struct Lsp {
     /// Servers that are not installed or are turned off: their documents are not synced.
     quiet: HashSet<String>,
     hover: u64,
+    definition_hover: u64,
+    last_anchor: Option<Bounds<Points>>,
 }
 
 thread_local! { static LSP: RefCell<Lsp> = RefCell::new(Lsp::default()); }
@@ -99,11 +107,57 @@ impl HoverCard {
 #[derive(Clone, Default, PartialEq)]
 struct Focused(Option<DocumentId>);
 
+/// Returns the document id of the currently focused editor, if any.
+pub(super) fn focused_document() -> Option<DocumentId> { global::<Focused>().get().0 }
+
+#[derive(Clone, PartialEq)]
+struct ServerStatusEntry {
+    key: String,
+    name: String,
+    languages: String,
+    badge: String,
+    detail: Option<String>,
+    ready: bool,
+    error: bool,
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct ServerStatuses(std::collections::BTreeMap<String, ServerStatusEntry>);
+
+#[derive(Clone, Default, PartialEq)]
+struct StatusSheetOpen(bool);
+
+#[derive(Clone, Default, PartialEq)]
+struct RenameSheet {
+    open: bool,
+    doc: Option<DocumentId>,
+    position: Position,
+    original: String,
+    draft: String,
+}
+
 // Public hooks.
 
-/// Starts the manager and its event pump, and binds Ctrl-Space and Option-Escape
-/// to completion. Called once from the root.
+/// Starts the manager and its event pump, and binds Ctrl-Space, Option-Escape,
+/// F12, Shift-Cmd-Space, F2, and Ctrl-Shift-I. Called once from the root.
 pub fn install() {
+    let mut initial = std::collections::BTreeMap::new();
+    for def in ServerCatalog::builtin().definitions() {
+        initial.insert(
+            def.id.clone(),
+            ServerStatusEntry {
+                key: def.id.clone(),
+                name: def.name.clone(),
+                languages: def.languages.keys().cloned().collect::<Vec<_>>().join(", "),
+                badge: if def.enabled { "Idle".to_owned() } else { "Disabled".to_owned() },
+                detail: Some(def.install_hint.clone()).filter(|s| !s.is_empty()),
+                ready: false,
+                error: false,
+            },
+        );
+    }
+    global::<ServerStatuses>().set(ServerStatuses(initial));
+
     let data = std::env::var_os("SCRATCHRUNNER_DATA_DIR").map(PathBuf::from);
     let path = std::env::var("PATH").unwrap_or_default();
     let mut config = ManagerConfig::new(std::env::temp_dir(), path, std::env::vars().collect());
@@ -117,8 +171,14 @@ pub fn install() {
     spawn(pump(events));
     effect(|| {
         let _ = global::<super::bindings::BindingsRevision>().get();
-        if global::<Focused>().get().0.is_none() { return; }
+        let focused = global::<Focused>().get().0.is_some();
+        super::bindings::on("lsp.serverStatus", open_status_sheet);
+        if !focused { return; }
         super::bindings::on("text.showCompletions", complete_focused);
+        super::bindings::on("lsp.goToDefinition", go_to_definition);
+        super::bindings::on("lsp.signatureHelp", signature_help);
+        super::bindings::on("lsp.rename", rename_symbol);
+        super::bindings::on("lsp.formatDocument", format_document);
         on_key("alt+escape", |_| complete_focused());
     });
 }
@@ -136,10 +196,11 @@ pub fn document_opened(id: DocumentId) {
 pub fn document_changed(id: DocumentId) {
     let edits = lsp(|lsp| lsp.docs.get_mut(&id).map(|doc| doc.sync.edited()));
     hide_hover();
+    maybe_trigger_signature_help(id);
     spawn(async move {
         let Some(edits) = edits else { sync_now(id); return; };
         timer(SYNC_DELAY).await;
-        let due = lsp(|lsp| lsp.docs.get(&id).is_some_and(|doc| doc.sync.edits == edits));
+        let due = lsp(|lsp| lsp.docs.get(&id).is_some_and(|doc| doc.sync.edits == edits && doc.sync.pending()));
         if due { sync_now(id); }
     });
 }
@@ -152,6 +213,9 @@ pub fn document_closed(id: DocumentId) {
     global::<Diagnostics>().update(|all| { all.0.remove(&id); });
     global::<Triggers>().update(|all| { all.0.remove(&id); });
     if global::<HoverCard>().with_untracked(|card| card.document == Some(id)) { hide_hover(); }
+    if global::<RenameSheet>().with_untracked(|sheet| sheet.open && sheet.doc == Some(id)) {
+        global::<RenameSheet>().update(|sheet| sheet.open = false);
+    }
     if global::<Focused>().with_untracked(|focused| focused.0 == Some(id)) { global::<Focused>().set(Focused(None)); }
 }
 
@@ -161,10 +225,11 @@ pub fn diagnostics(id: DocumentId) -> Vec<EditorDiagnostic> {
     global::<Diagnostics>().with(|all| all.0.get(&id).cloned().unwrap_or_default())
 }
 
-/// Wires an editor to its document's language server: completion as a word or
-/// a trigger character is typed, the hover card, and the diagnostics.
+/// Wires an editor to its document's language server: completion, hover,
+/// go-to-definition, code actions, and diagnostics.
 pub fn attach(editor: EditorElement, id: DocumentId) -> EditorElement {
     let diagnostics = computed(move || {
+        let _ = preferences::settings().with(|p| p.text_editing.diagnostics.from_console);
         let mut all = global::<Diagnostics>().with(|all| all.0.get(&id).cloned().unwrap_or_default());
         all.extend(state::console_diagnostics(id));
         all
@@ -179,7 +244,9 @@ pub fn attach(editor: EditorElement, id: DocumentId) -> EditorElement {
         .on_completion_accept(move |event: &EditorCompletionAcceptEvent| completion_accepted(id, &event.item))
         .on_hover(move |event: &EditorHoverEvent| hover_requested(id, event.clone()))
         .on_hover_end(hide_hover)
-        .on_selection_change(|_: &Vec<nsh_base::EditorSelection>| hide_hover())
+        .on_definition_request(move |request: &EditorDefinitionRequest| definition_requested(id, *request))
+        .on_code_action_request(move |request: &EditorCodeActionRequest| code_action_requested(id, *request))
+        .on_selection_change(|_: &Vec<EditorSelection>| hide_hover())
         .on_focus(move || {
             global::<Focused>().set(Focused(Some(id)));
             super::editor_focused();
@@ -195,32 +262,35 @@ pub async fn shutdown() {
     let _ = background(async move { let _ = tokio::time::timeout(Duration::from_secs(2), manager.shutdown()).await; }).await;
 }
 
-/// The hover card, mounted once at the root: a popover (DESIGN 7.20, 8.6.3)
-/// placed against the hovered word through an invisible trigger laid over it.
+/// Hover card, Rename Symbol sheet, and LSP Server Status modal, mounted once
+/// at the root.
 pub fn overlay() -> impl IntoElement {
     let card = global::<HoverCard>();
     let anchor = move || card.with(|card| card.anchor);
-    nsh_core::prelude::overlay()
-        .left(move || Length::from(anchor().origin.x))
-        .top(move || Length::from(anchor().origin.y))
-        .w(move || Length::from(anchor().size.width))
-        .h(move || Length::from(anchor().size.height))
-        .pointer_events(PointerEvents::None)
-        .child(popover()
-            .open(move || Some(card.with(|card| card.open)))
-            .on_open_change(|event: &PopoverEvent| {
-                if let PopoverEvent::OpenChange(false, _) = event { hide_hover(); }
-            })
-            .placement(Placement::Bottom)
-            .offset(px(6.0))
-            .margin(px(8.0))
-            .popup_style(|s| s.max_w(px(320.0)).p(px(12.0)).gap_2().rounded(px(design_tokens::radius_lg()))
-                .bg(design_tokens::popover()).border_1().border_color(design_tokens::border())
-                .shadow_md().shadow_color(design_tokens::shadow()))
-            .popup_starting_style(motion::popup_starting)
-            .popup_ending_style(motion::popup_ending)
-            .trigger(view().w_full().h_full().focusable(false))
-            .child(hover_content(card)))
+    view()
+        .child(nsh_core::prelude::overlay()
+            .left(move || Length::from(anchor().origin.x))
+            .top(move || Length::from(anchor().origin.y))
+            .w(move || Length::from(anchor().size.width))
+            .h(move || Length::from(anchor().size.height))
+            .pointer_events(PointerEvents::None)
+            .child(popover()
+                .open(move || Some(card.with(|card| card.open)))
+                .on_open_change(|event: &PopoverEvent| {
+                    if let PopoverEvent::OpenChange(false, _) = event { hide_hover(); }
+                })
+                .placement(Placement::Bottom)
+                .offset(px(6.0))
+                .margin(px(8.0))
+                .popup_style(|s| s.max_w(px(360.0)).p(px(12.0)).gap_2().rounded(px(design_tokens::radius_lg()))
+                    .bg(design_tokens::popover()).border_1().border_color(design_tokens::border())
+                    .shadow_md().shadow_color(design_tokens::shadow()))
+                .popup_starting_style(motion::popup_starting)
+                .popup_ending_style(motion::popup_ending)
+                .trigger(view().w_full().h_full().focusable(false))
+                .child(hover_content(card))))
+        .child(when(move || global::<RenameSheet>().with(|s| s.open), rename_sheet_view))
+        .child(when(move || global::<StatusSheetOpen>().with(|s| s.0), status_sheet_view))
 }
 
 fn hover_content(card: Signal<HoverCard>) -> impl IntoElement {
@@ -260,10 +330,17 @@ fn editor_styles() -> EditorStyles {
         .rounded(px(design_tokens::radius_lg())).bg(design_tokens::popover()).border_color(design_tokens::border())
         .text_size(px(type_body().size())).text_color(design_tokens::popover_foreground())
         .shadow_md().shadow_color(design_tokens::shadow()));
-    styles.diagnostic_error = underline(design_tokens::diag_error());
-    styles.diagnostic_warning = underline(design_tokens::diag_warning());
-    styles.diagnostic_info = underline(design_tokens::diag_info());
-    styles.diagnostic_hint = underline(design_tokens::diag_hint());
+    if preferences::settings().with(|p| p.text_editing.diagnostics.underline) {
+        styles.diagnostic_error = underline(design_tokens::diag_error());
+        styles.diagnostic_warning = underline(design_tokens::diag_warning());
+        styles.diagnostic_info = underline(design_tokens::diag_info());
+        styles.diagnostic_hint = underline(design_tokens::diag_hint());
+    } else {
+        styles.diagnostic_error = None;
+        styles.diagnostic_warning = None;
+        styles.diagnostic_info = None;
+        styles.diagnostic_hint = None;
+    }
     styles
 }
 
@@ -365,7 +442,13 @@ fn sync_now(id: DocumentId) -> Option<(oneshot::Receiver<()>, Manager, String)> 
     let key = server_key(&language);
     let (renamed, manager, served) = lsp(|lsp| {
         let served = key.as_ref().is_some_and(|key| !lsp.quiet.contains(key));
-        let doc = lsp.docs.entry(id).or_insert_with(|| Doc { uri: uri.clone(), language: language.clone(), sync: SyncState::default(), completions: Vec::new() });
+        let doc = lsp.docs.entry(id).or_insert_with(|| Doc {
+            uri: uri.clone(),
+            language: language.clone(),
+            sync: SyncState::default(),
+            completions: Vec::new(),
+            diagnostics: Vec::new(),
+        });
         // Save As gives the document a new URI: the old one closes and versions start again.
         let renamed = (doc.uri != uri).then(|| std::mem::replace(&mut doc.uri, uri.clone()));
         if renamed.is_some() { doc.sync = SyncState::default(); }
@@ -391,12 +474,44 @@ async fn pump(mut events: mpsc::UnboundedReceiver<ManagerEvent>) {
             ManagerEvent::Diagnostics { uri, version, diagnostics } => {
                 let target = lsp(|lsp| lsp.docs.iter().find(|(_, doc)| doc.uri == uri).filter(|(_, doc)| doc.sync.accepts(version)).map(|(id, _)| *id));
                 let Some(id) = target else { continue; };
+                lsp(|lsp| {
+                    if let Some(doc) = lsp.docs.get_mut(&id) {
+                        doc.diagnostics = diagnostics.clone();
+                    }
+                });
                 let converted = diagnostics.iter().map(|diagnostic| to_editor_diagnostic(diagnostic, &uri)).collect();
                 global::<Diagnostics>().update(|all| { all.0.insert(id, converted); });
             }
             ManagerEvent::Status { key, name, status } => {
                 let quiet = matches!(status, ServerStatus::NotInstalled { .. } | ServerStatus::Disabled);
-                let was_quiet = lsp(|lsp| if quiet { !lsp.quiet.insert(key.clone()) } else { false });
+                let was_quiet = lsp(|lsp| if quiet { !lsp.quiet.insert(key.clone()) } else { lsp.quiet.remove(&key); false });
+                let (badge, detail, ready, is_error) = match &status {
+                    ServerStatus::Disabled => ("Disabled".to_owned(), None, false, false),
+                    ServerStatus::NotInstalled { hint } => ("Not Installed".to_owned(), Some(hint.clone()), false, false),
+                    ServerStatus::Starting => ("Starting…".to_owned(), None, false, false),
+                    ServerStatus::Ready { version } => ("Ready".to_owned(), version.clone().map(|v| format!("Version {v}")), true, false),
+                    ServerStatus::Error { message } => ("Error".to_owned(), Some(first_line(message).to_owned()), false, true),
+                    ServerStatus::Stopped { reason } => ("Stopped".to_owned(), Some(first_line(reason).to_owned()), false, false),
+                };
+                global::<ServerStatuses>().update(|all| {
+                    if let Some(entry) = all.0.get_mut(&key) {
+                        entry.name = name.clone();
+                        entry.badge = badge;
+                        entry.detail = detail;
+                        entry.ready = ready;
+                        entry.error = is_error;
+                    } else {
+                        all.0.insert(key.clone(), ServerStatusEntry {
+                            key: key.clone(),
+                            name: name.clone(),
+                            languages: String::new(),
+                            badge,
+                            detail,
+                            ready,
+                            error: is_error,
+                        });
+                    }
+                });
                 if let Some(message) = status_notice(&name, &status).filter(|_| !was_quiet) { state::notice(message); }
                 if status.is_ready() { refresh_triggers(&key); }
             }
@@ -410,8 +525,7 @@ async fn pump(mut events: mpsc::UnboundedReceiver<ManagerEvent>) {
 /// The status bar's words for a server's state, when it is worth saying.
 fn status_notice(name: &str, status: &ServerStatus) -> Option<String> {
     Some(match status {
-        ServerStatus::Disabled => return None,
-        ServerStatus::NotInstalled { hint } => format!("{name} is not installed. {hint}"),
+        ServerStatus::Disabled | ServerStatus::NotInstalled { .. } => return None,
         ServerStatus::Starting => format!("Starting {name}…"),
         ServerStatus::Ready { .. } => format!("{name} is ready."),
         ServerStatus::Error { message } => format!("{name} could not start: {}", first_line(message)),
@@ -565,9 +679,20 @@ fn lines_unchanged(before: &str, now: &str, last: u32) -> bool {
 fn hover_requested(id: DocumentId, event: EditorHoverEvent) {
     // Mod held asks for a definition link, not a hover.
     if event.modifiers.cmd { return; }
-    let sequence = lsp(|lsp| { lsp.hover += 1; lsp.hover });
+    let sequence = lsp(|lsp| {
+        lsp.hover += 1;
+        lsp.last_anchor = Some(event.page_bounds);
+        lsp.hover
+    });
     let problems: Vec<_> = event.diagnostics.iter().map(|diagnostic| (diagnostic.severity, diagnostic.message.to_string())).collect();
-    let card = HoverCard { open: true, document: Some(id), anchor: event.page_bounds, problems, blocks: Vec::new() };
+    let mut initial_blocks = Vec::new();
+    if let Some((expr, val)) = super::debugger::hover_value(id, event.position) {
+        initial_blocks.push(Block::CodeBlock {
+            language: None,
+            code: format!("{expr} = {val}"),
+        });
+    }
+    let card = HoverCard { open: true, document: Some(id), anchor: event.page_bounds, problems, blocks: initial_blocks.clone() };
     if !card.is_empty() { global::<HoverCard>().set(card.clone()); }
     let position = Position::new(event.position.line, event.position.column);
     spawn(async move {
@@ -576,10 +701,485 @@ fn hover_requested(id: DocumentId, event: EditorHoverEvent) {
         let answer = background(async move { manager.hover(&uri, position).await }).await;
         if lsp(|lsp| lsp.hover) != sequence { return; }
         let Ok(Ok(Some(hover))) = answer else { return; };
-        let blocks = clip(hover.contents, HOVER_LIMIT);
-        if blocks.is_empty() { return; }
-        global::<HoverCard>().set(HoverCard { blocks, ..card });
+        let mut combined = initial_blocks;
+        combined.extend(clip(hover.contents, HOVER_LIMIT));
+        if combined.is_empty() && card.problems.is_empty() { return; }
+        global::<HoverCard>().set(HoverCard { blocks: combined, ..card });
     });
+}
+
+// ------------------------------------------------ Go to Definition / Signature / Actions / Rename / Format
+
+fn definition_requested(id: DocumentId, request: EditorDefinitionRequest) {
+    let seq = if request.trigger == EditorDefinitionTrigger::Hover {
+        lsp(|lsp| { lsp.definition_hover += 1; lsp.definition_hover })
+    } else {
+        0
+    };
+    let pos = Position::new(request.position.line, request.position.column);
+    spawn(async move {
+        let Some((landed, manager, uri)) = sync_now(id) else {
+            if request.trigger == EditorDefinitionTrigger::Key {
+                state::notice("No active language server for this document.");
+            }
+            return;
+        };
+        let _ = landed.await;
+        let uri_clone = uri.clone();
+        let Ok(Ok(def)) = background(async move { manager.definition(&uri_clone, pos).await }).await else {
+            if request.trigger == EditorDefinitionTrigger::Key {
+                state::notice("No definition found.");
+            }
+            return;
+        };
+        let Some(first) = def.targets.into_iter().next() else {
+            if request.trigger == EditorDefinitionTrigger::Key {
+                state::notice("No definition found.");
+            }
+            return;
+        };
+        match request.trigger {
+            EditorDefinitionTrigger::Hover => {
+                if lsp(|lsp| lsp.definition_hover) != seq { return; }
+                if let Some(api) = state::editor_api(id) {
+                    let link_range = def.origin.map(editor_range).unwrap_or(request.range);
+                    api.present_definition_link(request.id, link_range);
+                }
+            }
+            EditorDefinitionTrigger::Press | EditorDefinitionTrigger::Key => {
+                jump_to_location(id, &uri, first).await;
+            }
+        }
+    });
+}
+
+/// Navigates to the definition of the symbol under the caret (`F12`).
+pub fn go_to_definition() {
+    let Some(id) = with(|w| w.active) else { return; };
+    let Some(api) = state::editor_api(id) else { return; };
+    let Some(caret) = api.selections().last().map(|s| s.head) else { return; };
+    let pos = Position::new(caret.line, caret.column);
+    spawn(async move {
+        let Some((landed, manager, uri)) = sync_now(id) else {
+            state::notice("No active language server for this document.");
+            return;
+        };
+        let _ = landed.await;
+        let uri_clone = uri.clone();
+        let Ok(Ok(def)) = background(async move { manager.definition(&uri_clone, pos).await }).await else {
+            state::notice("No definition found.");
+            return;
+        };
+        let Some(first) = def.targets.into_iter().next() else {
+            state::notice("No definition found.");
+            return;
+        };
+        jump_to_location(id, &uri, first).await;
+    });
+}
+
+async fn jump_to_location(own_id: DocumentId, own_uri: &str, location: Location) {
+    if location.uri == own_uri {
+        state::record_jump();
+        if let Some(api) = state::editor_api(own_id) {
+            let start = editor_position(location.range.start);
+            let end = editor_position(location.range.end);
+            api.set_selections(vec![EditorSelection::new(start, end)]);
+            api.reveal_position(start, true);
+        }
+        state::focus(own_id);
+        return;
+    }
+    if let Ok(path) = scratch_lsp::uri_to_path(&location.uri) {
+        let start = editor_position(location.range.start);
+        let end = editor_position(location.range.end);
+        super::files::open_path_at_range(path, start, end).await;
+    }
+}
+
+fn maybe_trigger_signature_help(id: DocumentId) {
+    let Some(api) = state::editor_api(id) else { return; };
+    let Some(caret) = api.selections().last().map(|s| s.head) else { return; };
+    if caret.column == 0 { return; }
+    let text = api.value();
+    let Some(line) = text.split('\n').nth(caret.line as usize) else { return; };
+    let prev_ch = line.encode_utf16()
+        .take(caret.column as usize)
+        .last()
+        .and_then(|u| char::from_u32(u as u32));
+    if matches!(prev_ch, Some('(' | ',')) {
+        signature_help_for(id, caret);
+    }
+}
+
+/// Requests parameter/signature hints at the caret (`⇧⌘Space` or typing `(` / `,`).
+pub fn signature_help() {
+    let Some(id) = with(|w| w.active) else { return; };
+    let Some(api) = state::editor_api(id) else { return; };
+    let Some(caret) = api.selections().last().map(|s| s.head) else { return; };
+    signature_help_for(id, caret);
+}
+
+fn signature_help_for(id: DocumentId, caret: EditorPosition) {
+    let sequence = lsp(|lsp| { lsp.hover += 1; lsp.hover });
+    let anchor = lsp(|lsp| lsp.last_anchor).unwrap_or_else(|| Bounds::new(point(px(280.0), px(110.0)), size(px(8.0), px(20.0))));
+    let pos = Position::new(caret.line, caret.column);
+    spawn(async move {
+        let Some((landed, manager, uri)) = sync_now(id) else { return; };
+        let _ = landed.await;
+        let Ok(Ok(Some(help))) = background(async move { manager.signature_help(&uri, pos).await }).await else { return; };
+        if lsp(|lsp| lsp.hover) != sequence { return; }
+        let Some(sig) = help.signatures.get(help.active_signature).or_else(|| help.signatures.first()) else { return; };
+        let mut blocks = vec![Block::CodeBlock { language: None, code: sig.label.clone() }];
+        if let Some(idx) = help.current_parameter()
+            && let Some(param) = sig.parameters.get(idx)
+        {
+            let mut detail = format!("Active parameter: {}", param.label);
+            if let Some(doc) = &param.documentation {
+                let plain = doc.to_plain();
+                if !plain.is_empty() {
+                    detail.push_str(" — ");
+                    detail.push_str(&plain);
+                }
+            }
+            blocks.push(Block::Paragraph(vec![scratch_lsp::Inline::Text(detail)]));
+        }
+        if let Some(doc) = &sig.documentation {
+            blocks.extend(clip(doc.clone(), HOVER_LIMIT / 2));
+        }
+        global::<HoverCard>().set(HoverCard {
+            open: true,
+            document: Some(id),
+            anchor,
+            problems: Vec::new(),
+            blocks,
+        });
+    });
+}
+
+fn ranges_overlap(a: Range, b: Range) -> bool {
+    !(a.end < b.start || b.end < a.start)
+}
+
+fn code_action_requested(id: DocumentId, request: EditorCodeActionRequest) {
+    let range = Range::new(
+        request.range.start.line,
+        request.range.start.column,
+        request.range.end.line,
+        request.range.end.column,
+    );
+    let diags: Vec<Diagnostic> = lsp(|lsp| {
+        lsp.docs.get(&id).map(|doc| {
+            doc.diagnostics.iter().filter(|d| ranges_overlap(d.range, range)).cloned().collect()
+        }).unwrap_or_default()
+    });
+    if let Some(b) = request.bounds {
+        lsp(|lsp| { lsp.last_anchor = Some(b.page_bounds); });
+    }
+    spawn(async move {
+        let Some((landed, manager, uri)) = sync_now(id) else {
+            state::notice("No language server active for code actions.");
+            return;
+        };
+        let _ = landed.await;
+        let uri_clone = uri.clone();
+        let manager_req = manager.clone();
+        let Ok(Ok(actions)) = background(async move { manager_req.code_actions(&uri_clone, range, &diags).await }).await else {
+            state::notice("No code actions available.");
+            return;
+        };
+        if actions.is_empty() {
+            state::notice("No code actions available at caret.");
+            return;
+        }
+        let items: Vec<MenuItem> = actions.into_iter().map(|action| {
+            let title = action.title.clone();
+            let disabled = action.disabled_reason.is_some();
+            let mgr = manager.clone();
+            let doc_uri = uri.clone();
+            MenuItem::new(title).disabled(disabled).on_select(move || {
+                let mgr = mgr.clone();
+                let doc_uri = doc_uri.clone();
+                let act: CodeAction = action.clone();
+                Owner::detached().run(|| {
+                    spawn(async move {
+                        let Ok(Ok(applied)) = background(async move { mgr.apply_code_action(&doc_uri, &act).await }).await else {
+                            state::notice("Could not apply code action.");
+                            return;
+                        };
+                        apply_applied_edit(applied);
+                    });
+                });
+            })
+        }).collect();
+        if let Some(bounds) = request.bounds {
+            drop(popup_menu_at(items, point(bounds.page_bounds.origin.x, bounds.page_bounds.origin.y + bounds.page_bounds.size.height)));
+        } else {
+            let _ = popup_menu(items).await;
+        }
+    });
+}
+
+fn resolve_prepare_rename(
+    prep: std::result::Result<Option<scratch_lsp::PrepareRename>, scratch_lsp::LspError>,
+    fallback_word: &str,
+) -> Option<String> {
+    let candidate = match prep {
+        Ok(Some(p)) => p
+            .placeholder
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| fallback_word.to_owned()),
+        Err(scratch_lsp::LspError::Unsupported(_)) if !fallback_word.is_empty() => {
+            fallback_word.to_owned()
+        }
+        _ => return None,
+    };
+    (!candidate.is_empty()).then_some(candidate)
+}
+
+/// Opens the Rename Symbol sheet (`F2`) for the identifier at the caret.
+pub fn rename_symbol() {
+    let Some(id) = with(|w| w.active) else { return; };
+    let Some(api) = state::editor_api(id) else { return; };
+    let Some(caret) = api.selections().last().map(|s| s.head) else { return; };
+    let word = {
+        let selected = api.selected_text().trim().to_owned();
+        if !selected.is_empty() {
+            selected
+        } else {
+            let text = api.value();
+            text.split('\n')
+                .nth(caret.line as usize)
+                .and_then(|line| super::find::word_at(line, caret.column))
+                .unwrap_or_default()
+        }
+    };
+    let pos = Position::new(caret.line, caret.column);
+    spawn(async move {
+        let Some((landed, manager, uri)) = sync_now(id) else {
+            state::notice("No language server active for rename.");
+            return;
+        };
+        let _ = landed.await;
+        let Ok(prep) = background(async move { manager.prepare_rename(&uri, pos).await }).await else {
+            state::notice("This symbol cannot be renamed.");
+            return;
+        };
+        let Some(initial) = resolve_prepare_rename(prep, &word) else {
+            state::notice("This symbol cannot be renamed.");
+            return;
+        };
+        global::<RenameSheet>().set(RenameSheet {
+            open: true,
+            doc: Some(id),
+            position: pos,
+            original: initial.clone(),
+            draft: initial,
+        });
+    });
+}
+
+fn commit_rename() {
+    let sheet = global::<RenameSheet>().with_untracked(|s| s.clone());
+    global::<RenameSheet>().update(|s| s.open = false);
+    let Some(id) = sheet.doc else { return; };
+    let new_name = sheet.draft.trim().to_owned();
+    if new_name.is_empty() || new_name == sheet.original { return; }
+    let pos = sheet.position;
+    spawn(async move {
+        let Some((landed, manager, uri)) = sync_now(id) else {
+            state::notice("No language server active for rename.");
+            return;
+        };
+        let _ = landed.await;
+        let m1 = manager.clone();
+        let u1 = uri.clone();
+        let ws_edit = match background(async move { m1.rename(&u1, pos, &new_name).await }).await {
+            Ok(Ok(edit)) => edit,
+            _ => {
+                state::notice("Rename is not supported at this symbol.");
+                return;
+            }
+        };
+        if ws_edit.is_empty() { return; }
+        let m2 = manager.clone();
+        if let Ok(Ok(applied)) = background(async move { m2.apply_workspace_edit(&ws_edit).await }).await {
+            apply_applied_edit(applied);
+        }
+    });
+}
+
+/// Formats the active document via its language server (`⌃⇧I`).
+pub fn format_document() {
+    let Some(id) = with(|w| w.active) else { return; };
+    let (tab_size, insert_spaces) = preferences::settings().with_untracked(|p| (
+        p.text_editing.indentation.tab_width.max(1),
+        p.text_editing.indentation.soft_tabs,
+    ));
+    let options = FormattingOptions {
+        tab_size,
+        insert_spaces,
+        trim_trailing_whitespace: false,
+        insert_final_newline: false,
+    };
+    spawn(async move {
+        let Some((landed, manager, uri)) = sync_now(id) else {
+            state::notice("No language server active for formatting.");
+            return;
+        };
+        let _ = landed.await;
+        let edits_before = lsp(|lsp| lsp.docs.get(&id).map(|d| d.sync.edits));
+        let Ok(Ok(mut edits)) = background(async move { manager.format(&uri, options).await }).await else {
+            state::notice("Formatting is not supported by this language server.");
+            return;
+        };
+        if edits.is_empty() { return; }
+        let edits_after = lsp(|lsp| lsp.docs.get(&id).map(|d| d.sync.edits));
+        if edits_before != edits_after {
+            return;
+        }
+        edits.sort_by_key(|e| std::cmp::Reverse((e.range.start.line, e.range.start.character)));
+        if let Some(api) = state::editor_api(id) {
+            api.edit(edits.iter().map(editor_edit).collect());
+        }
+    });
+}
+
+fn apply_applied_edit(applied: AppliedEdit) {
+    let uri_map: Vec<(DocumentId, String, Option<PathBuf>)> = with(|w| {
+        w.documents.iter().map(|d| (d.document.id, String::new(), state::saved_path(&d.document))).collect()
+    });
+    for file_edit in applied.edits {
+        let matched = lsp(|lsp| {
+            lsp.docs.iter().find(|(_, d)| d.uri == file_edit.uri).map(|(id, _)| *id)
+        }).or_else(|| {
+            let target_path = scratch_lsp::uri_to_path(&file_edit.uri).ok()?;
+            uri_map.iter().find(|(_, _, p)| p.as_ref() == Some(&target_path)).map(|(id, _, _)| *id)
+        });
+        let Some(doc_id) = matched else { continue; };
+        let Some(api) = state::editor_api(doc_id) else { continue; };
+        let new_text = file_edit.new_text.clone();
+        if !file_edit.edits.is_empty() {
+            let mut edits = file_edit.edits;
+            edits.sort_by_key(|e| std::cmp::Reverse((e.range.start.line, e.range.start.character)));
+            api.edit(edits.iter().map(editor_edit).collect());
+        } else {
+            let cur = api.value();
+            if cur != new_text {
+                api.set_value(new_text.clone());
+            }
+        }
+        lsp(|lsp| {
+            if let Some(doc) = lsp.docs.get_mut(&doc_id) {
+                doc.sync.record(&doc.language, &new_text);
+            }
+        });
+    }
+}
+
+/// Opens the LSP Server Status modal sheet (Diagnostics > LSP Server Status…).
+pub fn open_status_sheet() {
+    global::<StatusSheetOpen>().set(StatusSheetOpen(true));
+}
+
+fn rename_sheet_view() -> impl IntoElement {
+    let sheet = global::<RenameSheet>();
+    let close = || global::<RenameSheet>().update(|s| s.open = false);
+    nsh_base::dialog()
+        .animation(ModalAnimation::None)
+        .label("Rename Symbol")
+        .on_cancel(close)
+        .flex_1()
+        .child(view().absolute().inset_0().bg(design_tokens::scrim).on_press(close))
+        .child(view().flex_1().items_center().pt(px(56.0)).child(
+            view()
+                .w(px(360.0))
+                .p(px(18.0))
+                .gap(px(10.0))
+                .rounded(px(design_tokens::radius_xl()))
+                .bg(design_tokens::background)
+                .border_1()
+                .border_color(design_tokens::border)
+                .shadow_lg()
+                .shadow_color(design_tokens::shadow())
+                .child(type_subhead().semibold().apply(text("Rename Symbol")).text_color(design_tokens::foreground))
+                .child(input()
+                    .value(move || sheet.with(|s| s.draft.clone()))
+                    .auto_focus(true)
+                    .placeholder("New symbol name")
+                    .on_change(move |v: &str| sheet.update(|s| s.draft = v.to_owned()))
+                    .on_submit(move |_: &str| commit_rename())
+                    .h(px(28.0)).px_2().text_sm()
+                    .font_family(scratch_ui_kit::typography::CODE_FONT_STACK)
+                    .bg(design_tokens::field).text_color(design_tokens::foreground)
+                    .border_1().border_color(design_tokens::input).rounded(px(design_tokens::radius())))
+                .child(view().flex_row().justify_end().gap(px(8.0)).pt(px(4.0))
+                    .child(button("Cancel", ButtonOptions::new().variant(ButtonVariant::Default).size(ControlSize::Sm), close))
+                    .child(button("Rename", ButtonOptions::new().variant(ButtonVariant::Primary).size(ControlSize::Sm), commit_rename))),
+        ))
+}
+
+fn status_sheet_view() -> impl IntoElement {
+    let close = || global::<StatusSheetOpen>().set(StatusSheetOpen(false));
+    nsh_base::dialog()
+        .animation(ModalAnimation::None)
+        .label("Language Server Status")
+        .on_cancel(close)
+        .flex_1()
+        .child(view().absolute().inset_0().bg(design_tokens::scrim).on_press(close))
+        .child(view().flex_1().items_center().pt(px(44.0)).child(
+            view()
+                .w(px(520.0))
+                .p(px(18.0))
+                .gap(px(10.0))
+                .rounded(px(design_tokens::radius_xl()))
+                .bg(design_tokens::background)
+                .border_1()
+                .border_color(design_tokens::border)
+                .shadow_lg()
+                .shadow_color(design_tokens::shadow())
+                .child(view().flex_row().items_center().justify_between()
+                    .child(type_subhead().semibold().apply(text("Language Server Status")).text_color(design_tokens::foreground))
+                    .child(type_caption().apply(text(move || {
+                        let count = global::<ServerStatuses>().with(|s| s.0.values().filter(|e| e.ready).count());
+                        format!("{count} running")
+                    })).text_color(design_tokens::muted_foreground)))
+                .child(scroll().max_h(px(320.0)).gap(px(6.0)).child(dynamic(move || {
+                    let entries: Vec<ServerStatusEntry> = global::<ServerStatuses>()
+                        .with(|all| all.0.values().cloned().collect());
+                    view().flex_col().gap(px(6.0)).children(entries.into_iter().map(|entry| {
+                        let tone = if entry.ready {
+                            Tone::Success
+                        } else if entry.error {
+                            Tone::Danger
+                        } else {
+                            Tone::Muted
+                        };
+                        let icon = if entry.ready {
+                            IconName::SuccessCircle
+                        } else if entry.error {
+                            IconName::ErrorCircle
+                        } else {
+                            IconName::InfoCircle
+                        };
+                        let detail = entry.detail.clone();
+                        let has_detail = detail.is_some();
+                        view().p(px(8.0)).gap(px(4.0)).rounded(px(design_tokens::radius())).bg(design_tokens::card)
+                            .border_1().border_color(design_tokens::border)
+                            .child(view().flex_row().items_center().gap(px(6.0))
+                                .child(glyph(icon, IconSize::Xs, tone))
+                                .child(type_body().medium().apply(text(entry.name)).text_color(design_tokens::foreground))
+                                .child(type_caption().apply(text(entry.languages)).flex_1().min_w(px(0.0)).text_color(design_tokens::muted_foreground))
+                                .child(badge(SharedString::from(entry.badge), BadgeOptions::new())))
+                            .child(when(move || has_detail, {
+                                let d = detail.unwrap_or_default();
+                                move || type_caption().apply(text(d.clone())).select_text().text_color(design_tokens::muted_foreground)
+                            }))
+                    })).into_element()
+                })))
+                .child(view().flex_row().justify_end().pt(px(4.0))
+                    .child(button("Done", ButtonOptions::new().variant(ButtonVariant::Primary).size(ControlSize::Sm), close))),
+        ))
 }
 
 fn hide_hover() {
@@ -779,5 +1379,52 @@ mod tests {
     fn hover_text_is_clipped() {
         let text = RichText::markdown(&"word ".repeat(10).replace(' ', "\n\n"));
         assert!(clip(text, 8).len() < 10);
+    }
+
+    #[test]
+    fn prepare_rename_respects_rejection_and_unsupported() {
+        assert_eq!(
+            resolve_prepare_rename(Ok(None), "if"),
+            None,
+            "server rejecting prepareRename must abort rename"
+        );
+        assert_eq!(
+            resolve_prepare_rename(
+                Err(scratch_lsp::LspError::Server {
+                    code: -32600,
+                    message: "cannot rename".into()
+                }),
+                "foo"
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_prepare_rename(
+                Err(scratch_lsp::LspError::Unsupported("prepareRename".into())),
+                "foo"
+            ),
+            Some("foo".to_owned())
+        );
+        assert_eq!(
+            resolve_prepare_rename(
+                Ok(Some(scratch_lsp::PrepareRename {
+                    range: Range::new(0, 0, 0, 3),
+                    placeholder: Some("bar".into()),
+                })),
+                "foo"
+            ),
+            Some("bar".to_owned())
+        );
+    }
+
+    #[test]
+    fn sync_state_record_after_edit_clears_pending() {
+        let mut sync = SyncState::default();
+        sync.record("rust", "let x = 1;");
+        sync.edited();
+        assert!(sync.pending());
+        let ver = sync.record("rust", "let y = 1;");
+        assert!(!sync.pending());
+        assert!(sync.accepts(Some(ver)));
     }
 }

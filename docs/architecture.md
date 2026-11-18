@@ -47,19 +47,12 @@ back into the editor.
 - `state::Workspace` holds the document handles (editor refs, drafts, timers), the run in
   progress and the language-server manager.
 
-## Deviations from the specification
+## Notes & Known Scopes
 
-- **Title bar**: the window keeps the system title bar; the 52 pt toolbar with the name and
-  Run/Stop is drawn below it. NSH's `TitleBarStyle::Hidden` is set on windows the app makes,
-  not on the root window that `run_app` creates.
-- **One run at a time** across the app, not one per document.
-- **Language-server files**: unsaved documents are identified by a stable URI in
-  `~/Library/Caches/ScratchRunner/workspaces/<id>/`, but nothing is written there.
-- **Cargo projects** run the saved file on disk, not the editor's text.
-- **Closed scratchpads** keep their draft on disk; there is no list to reopen them from yet.
-- **Settings UI** shows the values in effect and reloads `settings.toml`; it does not edit them.
-- **Theme**: colors follow the system appearance. The `theme` setting is read but not applied.
-- **Signature help** is implemented in `scratch-lsp` and not yet shown in the UI.
+- **Title bar**: the main window uses `TitleBarStyle::Hidden` with a custom 32 pt title band (`chrome.rs`) sharing space with traffic lights, window placement persistence, and inactive focus dimming.
+- **Multi-window**: `File > New Window` (`--new-window` / `--open`), `Move Tab to New Window` (`--handoff` recovery snapshot), Preferences, `About ScratchRunner`, and `ScratchRunner Help` run as native desktop windows.
+- **Language-server files**: unsaved documents use a stable virtual workspace URI so LSP requests (`hover`, `definition`, `signatureHelp`, `codeAction`, `rename`, `formatting`) operate without forcing a save first.
+- **Preferences & Themes**: all Settings panes (`General`, `Text Editing`, `Shell`, `Languages`, `Keyboard`, `Themes`, `Advanced`) persist live changes to `settings.toml` / language TOMLs / `.crBindings` / `.tmTheme`, and `theme::install()` synchronizes NSH's design tokens and editor palette across light and dark appearances.
 
 ## Workbench modules
 
@@ -67,18 +60,25 @@ The window is built in `src/workbench/`, one file per concern:
 
 | File | Owns |
 |---|---|
-| `mod.rs` | The root layout, the menu and key bindings, startup and autosave, the editors |
-| `chrome.rs` | The toolbar (language, run group, panel toggles), the tab strip, the status bar |
-| `console.rs` | The console panel: output from `scratch-console-model`, status, Clear, Stop, program input |
-| `execution.rs` | Runs: request construction, streaming into the console, stop, input |
-| `run_settings.rs` | The Run Settings sheet; run settings persist on `Document.run` |
-| `navigator.rs` | The left navigator: folder tree, filter, new file and folder, context menu |
-| `quick_open.rs` | Open Quickly (Shift-Cmd-O): tabs, files, typed paths |
-| `find.rs` | The find bar (on the NSH editor's search) and Go to Line |
-| `edit.rs` | Text commands and editor display options |
-| `preferences.rs` | The Preferences window; `settings()` is the live source, `save()` writes `settings.toml` |
-| `lsp.rs` | Language servers: sync, completion, hover, diagnostics |
-| `files.rs`, `state.rs`, `persistence.rs` | Document files, workspace state, recovery journal |
+| `mod.rs` | The root layout, menu and key bindings, CLI handoff/window args, startup and autosave, editors |
+| `chrome.rs` | The toolbar (language, 3-button run capsule, panel toggles), tab strip, status bar, CPU/RSS pill |
+| `console.rs` | Console panel: ANSI/diagnostics output (`scratch-console-model`), `Jump to Bottom`, Up/Down input history, Web/Markdown `WKWebView` preview + JS Inspector |
+| `debugger.rs` | Debugger sessions (`lldb`/`gdb`/`xdebug`/`pdb`/`node`/`jdb`/`bashdb`/`perl`/`phpdbg`), split `Stack \| Variables` panes, sort/type/hover/auto-hide options, breakpoint sheets |
+| `diagnostics.rs` | Manual/on-run/on-edit linter jobs, output parsers, ignored-message sheets |
+| `docs.rs` | Embedded `WKWebView` documentation browser, global/per-language sources, TOC footer, reader CSS, bookmarks, offline fallback |
+| `execution.rs` | Runs: `CompileOnly`/`Run`/`RunSelection` planning, streaming into console, live stats, stop, >128 KiB output alert |
+| `run_settings.rs` | The Run Settings sheet (`Arguments`, `Input`, `Compile Flags`, `Make Default`, Help); persists on `Document.run` |
+| `navigator.rs` | The left navigator wrapper: folder tree, `Go to Folder…`, new file from template, context menu, Search switch |
+| `search_sidebar.rs` | Project Search & Replace sidebar: regex/whole-word/case modes, custom path sets, `ReplacePlan` confirmation, `ReplaceJournal` undo |
+| `quick_open.rs` | Open Quickly (`⇧⌘O`), Command/Language selection palettes |
+| `find.rs` | Find & Replace bar (`Text`, `Exact Word`, `Word Prefix`, `Word Suffix`, `Ignoring Whitespace`, `Regex`, regex helpers, history, `All In Selection`), Go to Line |
+| `edit.rs` | Text commands, Emacs kill-ring (`⌃K`/`⌃Y`), Custom surround sheet, Color Scopes inspector, editor display options |
+| `preferences.rs` | Preferences window: General/Text Editing/Shell/Languages/Keyboard/Themes/Advanced panes, interactive `KeyRecorder`, Shell Auto-PATH preview & refresh, per-pane sizing |
+| `help.rs` | Native `About ScratchRunner` dialog and searchable multi-topic `ScratchRunner Help` (`⌘?`) window |
+| `compound.rs`, `bindings.rs` | `.crBindings` resolution, command dispatch, `Machine<EditorHost>` multi-stroke compound/Vim execution with read-only modal locks |
+| `lsp.rs` | Language servers: sync, completion, hover, go-to-definition, signature help, code actions, rename, format document, status sheet |
+| `theme.rs`, `native.rs`, `ui.rs` | TextMate syntax decorations, token sync, syntax-colored HTML printing, AppKit `KeyDown` recorder monitor, WebKit/Pasteboard/Speech/Font bridges |
+| `files.rs`, `state.rs`, `persistence.rs` | Document files, first-launch welcome script & numbered untitled tabs, tab-insertion rules, clean reload, window placement, recovery journal |
 
 The controls come from `crates/ui-kit` (`scratch-ui-kit`), the app's component
 layer. The theme is `ui/theme.json`, named by `nsh.json`. `cargo run` reads the

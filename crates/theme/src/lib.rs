@@ -9,7 +9,7 @@
 //!   [`Theme::inverted`], [`Theme::duplicate`], [`Theme::is_dark`],
 //!   [`Theme::editor_colors`] (selection, caret, line highlight, gutter, ...)
 //!   and [`Theme::chrome`] (sidebar/console/toolbar tints).
-//! * [`ThemeLibrary`]: the 11 built-in themes plus the user directory, with
+//! * [`ThemeLibrary`]: the 15 built-in themes plus the user directory, with
 //!   the Themes tab operations (new, duplicate, rename, invert, delete/reset,
 //!   import, export).
 //! * [`ScopeSelector`]: the TextMate selector language with CodeRunner's

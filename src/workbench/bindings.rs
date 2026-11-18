@@ -103,6 +103,14 @@ pub const COMMANDS: &[Bound] = &[
     bound("find.searchSelectedDocument", "MainMenu/Find/Search for Selected Text in Current Document", &[], "Find", "Search for Selected Text in Current Document", "cmd+ctrl+shift+f"),
     bound("text.goToLine", "MainMenu/Text/Go to Line…", &[], "Find", "Go to Line…", "mod+l"),
     bound("find.searchInFileSystem", "MainMenu/Find/Search in File System…", &[], "Find", "Search in Files…", "mod+alt+shift+f"),
+    bound("find.mode.text", "MainMenu/Find/Find Mode/Text", &[], "Find", "Find Mode: Text", ""),
+    bound("find.mode.regularExpression", "MainMenu/Find/Find Mode/Regular Expression", &[], "Find", "Find Mode: Regular Expression", ""),
+    bound("find.mode.word", "MainMenu/Find/Find Mode/Word", &[], "Find", "Find Mode: Word", ""),
+    bound("find.mode.wordPrefix", "MainMenu/Find/Find Mode/Word Prefix", &[], "Find", "Find Mode: Word Prefix", ""),
+    bound("find.mode.wordSuffix", "MainMenu/Find/Find Mode/Word Suffix", &[], "Find", "Find Mode: Word Suffix", ""),
+    bound("find.mode.ignoringWhitespace", "MainMenu/Find/Find Mode/Ignoring Whitespace", &[], "Find", "Find Mode: Ignoring Whitespace", ""),
+    bound("find.ignoreCase", "MainMenu/Find/Find Mode/Ignore Case", &[], "Find", "Ignore Case", ""),
+    bound("find.wrapAround", "MainMenu/Find/Find Mode/Wrap Around", &[], "Find", "Wrap Around", ""),
 
     bound("text.autoIndentSelection", "MainMenu/Text/Auto-Indent Selection", &[], "Text", "Auto-Indent Selection", "ctrl+i"),
     bound("text.shiftRight", "MainMenu/Text/Shift Right", &["shiftRightSelection"], "Text", "Shift Right", "mod+]"),
@@ -131,6 +139,14 @@ pub const COMMANDS: &[Bound] = &[
     bound("text.surround.parentheses", "MainMenu/Text/Surround Selection With/Parentheses", &[], "Text", "Surround With Parentheses", "cmd+shift+9"),
     bound("text.surround.braces", "MainMenu/Text/Surround Selection With/Braces", &[], "Text", "Surround With Braces", "ctrl+cmd+shift+["),
     bound("text.surround.brackets", "MainMenu/Text/Surround Selection With/Brackets", &[], "Text", "Surround With Brackets", "alt+cmd+["),
+    bound("text.surround.custom", "MainMenu/Text/Surround Selection With/Custom…", &[], "Text", "Surround With Custom…", ""),
+    bound("edit.killToLineEnd", "MainMenu/Edit/Kill to Line End", &[], "Edit", "Kill to Line End", "ctrl+k"),
+    bound("edit.yank", "MainMenu/Edit/Yank", &[], "Edit", "Yank", "ctrl+y"),
+    bound("lsp.goToDefinition", "MainMenu/Text/Go to Definition", &[], "Text", "Go to Definition", "f12"),
+    bound("lsp.signatureHelp", "MainMenu/Text/Show Signature Help", &[], "Text", "Show Signature Help", "cmd+shift+space"),
+    bound("lsp.rename", "MainMenu/Text/Rename Symbol…", &[], "Text", "Rename Symbol…", "f2"),
+    bound("lsp.formatDocument", "MainMenu/Text/Format Document", &[], "Text", "Format Document", "ctrl+shift+i"),
+    bound("lsp.serverStatus", "MainMenu/Diagnostics/LSP Server Status…", &[], "Diagnostics", "LSP Server Status…", ""),
     bound("text.singleSelection", "MainMenu/Text/Single Selection", &["singleSelection"], "Text", "Single Selection", "cmd+ctrl+j"),
     bound("text.selectWord", "MainMenu/Text/Select Word", &["selectWord"], "Text", "Select Word", "ctrl+w"),
     bound("text.selectToDelimiters", "MainMenu/Text/Select to Delimiters", &[], "Text", "Select to Delimiters", "ctrl+alt+up"),
@@ -157,6 +173,7 @@ pub const COMMANDS: &[Bound] = &[
     bound("run.stop", "MainMenu/Run/Stop", &[], "Run", "Stop", "mod+."),
     bound("run.runAndDebug", "MainMenu/Run/Run and Debug", &[], "Run", "Run and Debug", "mod+alt+r"),
     bound("run.runWithoutDebugging", "MainMenu/Run/Run Without Debugging", &[], "Run", "Run Without Debugging", "cmd+ctrl+r"),
+    bound("run.runSelection", "MainMenu/Run/Run Selection", &[], "Run", "Run Selection", "cmd+ctrl+shift+r"),
     bound("run.runDiagnostics", "MainMenu/Run/Run Diagnostics", &[], "Run", "Run Diagnostics", "mod+b"),
     bound("sr.stopDebugging", "MainMenu/Run/Stop Debugging", &[], "Run", "Stop Debugging", ""),
     bound("debug.toggleBreakpoint", "MainMenu/Run/Debugging/Toggle Breakpoint at Current Line", &[], "Run", "Toggle Breakpoint", "mod+\\"),
@@ -307,8 +324,6 @@ pub fn register(id: &str, handler: impl Fn() + 'static) {
 }
 
 /// Runs the handler bound command `id` was installed with, if any.
-// Unused while the pinned nsh has no key events for the compound machine.
-#[allow(dead_code)]
 pub fn dispatch(id: &str) -> bool {
     let handler = HANDLERS.with(|h| h.borrow().get(id).cloned());
     match handler {
@@ -320,8 +335,6 @@ pub fn dispatch(id: &str) -> bool {
 /// Runs the bound command `command` names — a `MainMenu/…` path or one of a
 /// command's `names` (`selectTab3`, `shiftRight`); for compound commands'
 /// `execute`/`selectMenuItem:`.
-// Unused while the pinned nsh has no key events for the compound machine.
-#[allow(dead_code)]
 pub fn dispatch_command(command: &str) -> bool {
     COMMANDS.iter()
         .find(|bound| bound.path == command || bound.names.contains(&command))
@@ -406,8 +419,6 @@ pub fn mutate_global(f: impl FnOnce(&mut BindingSet)) {
 
 /// Records `shortcut` on `bound` (`None` unbinds it): updates the matching
 /// binding — by command name, then menu path — or inserts one.
-// Unused while the pinned nsh has no key events for the recorder.
-#[allow(dead_code)]
 pub fn record(bound: &Bound, shortcut: Option<Shortcut>) {
     mutate_set(|set| {
         if let Some(b) = set.bindings.iter_mut().find(|b| matches(b, bound)) {
@@ -559,6 +570,3 @@ pub fn show_in_finder() {
         let _ = std::process::Command::new("open").arg(store.dir()).spawn();
     }
 }
-
-// The shortcut recorder (`stroke_of` on a `KeyEvent`) is gone: the pinned nsh
-// exposes no raw key events.

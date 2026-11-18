@@ -396,16 +396,27 @@ pub fn navigator(store: Store) -> impl IntoElement {
         store.scroll_y.replace(e.offset.y.0);
     })
     .empty(
-        text(move || {
-            if store.filter.with(String::is_empty) {
-                "Empty folder"
-            } else {
-                "No Filter Results"
-            }
-        })
-        .p_4()
-        .text_size(px(12.0))
-        .text_color(theme::muted),
+        view()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .gap(px(8.0))
+            .p_4()
+            .child(
+                text(move || {
+                    if store.filter.with(String::is_empty) {
+                        "Empty folder"
+                    } else {
+                        "No Filter Results"
+                    }
+                })
+                .text_size(px(12.0))
+                .text_color(theme::muted),
+            )
+            .child(when(
+                move || !store.filter.with(String::is_empty),
+                move || super::controls::pill("Reset Filter", move || store.set_filter(String::new())),
+            )),
     )
     .element_ref(&store.list)
     .flex_1();

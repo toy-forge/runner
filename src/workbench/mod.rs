@@ -17,6 +17,7 @@ mod edit;
 mod execution;
 mod find;
 mod files;
+mod help;
 mod lsp;
 mod native;
 mod navigator;
@@ -71,6 +72,7 @@ pub fn ScratchRunner() -> impl IntoElement {
     start();
     navigator::install();
     docs::install();
+    theme::install();
     install_menu();
     install_keys();
     install_autosave();
@@ -81,11 +83,17 @@ pub fn ScratchRunner() -> impl IntoElement {
     native::warm_font_cache();
     // Preferences > Themes > Match Appearance to Theme.
     effect(|| {
-        if theme::match_appearance() {
+        let separate = preferences::settings().with(|p| p.themes.use_separate_color_themes);
+        if theme::match_appearance() && !separate {
             set_color_scheme(if theme::theme_is_dark() { Appearance::Dark } else { Appearance::Light });
         } else {
             set_color_scheme(Appearance::System);
         }
+    });
+    // Preferences > General > Show all filename extensions.
+    effect(|| {
+        let _ = preferences::settings().with(|p| p.general.documents.show_all_extensions);
+        state::publish();
     });
     desktop::on_app_quit(|| {
         let snapshot = state::snapshot();
@@ -100,30 +108,69 @@ pub fn ScratchRunner() -> impl IntoElement {
             }
         }
     });
-    view().flex_1().min_h(px(0.0)).bg(move || theme().background).text_color(move || theme().foreground)
+    view().flex_1().min_h(px(0.0)).bg(scratch_ui_kit::tokens::window).text_color(move || theme().foreground)
         .child(chrome::title_band())
         .child(when(move || display().with(|view| view.toolbar_visible), chrome::toolbar))
         .child(when(move || display().with(|view| view.tab_bar_visible), chrome::tab_bar))
-        .child(view().flex_1().min_h(px(0.0)).flex_row()
-            .child(when(move || display().with(|view| view.sidebar_visible), || {
-                view().w(move || px(if window().width.0 < 720.0 { 200.0 } else { 240.0 }))
-                    .h_full().border_r_1().border_color(move || theme().border).bg(move || theme().card)
-                    .child(navigator::sidebar())
-            }))
-            .child(view().flex_1().min_w(px(0.0)).min_h(px(0.0)).flex_col()
-                .child(workspace_panels()))
-            .child(when(move || display().with(|view| view.docs_visible), || {
-                view().w(move || px(if window().width.0 < 900.0 { 240.0 } else { 300.0 }))
-                    .min_w(px(240.0)).max_w(px(600.0)).h_full().border_l_1().border_color(move || theme().border)
-                    .child(docs::panel())
-            })))
-        .child(chrome::status_bar())
+        .child(resizable_panel_group()
+            .axis(Axis::Horizontal)
+            .handle_class("bg-border")
+            .flex_1()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
+            .child(resizable_panel()
+                .size(move || Some(px(display().with(|view| view.sidebar_width))))
+                .size_range(px(scratch_ui_kit::tokens::sidebar_min_w())..px(scratch_ui_kit::tokens::sidebar_max_w()))
+                .visible(move || display().with(|view| view.sidebar_visible))
+                .on_resize(|size: &Points| {
+                    display().update(|view| view.sidebar_width = size.0);
+                    with(|workspace| workspace.changed());
+                })
+                .child(view().flex_1().h_full()
+                    .macos_backdrop({
+                        let mut backdrop = nsh_core::MacOsBackdrop::default();
+                        backdrop.material = nsh_core::MacOsBackdropMaterial::Sidebar;
+                        backdrop.blending = nsh_core::MacOsBackdropBlending::BehindWindow;
+                        backdrop.state = nsh_core::MacOsBackdropState::FollowsWindowActiveState;
+                        backdrop
+                    })
+                    .bg(scratch_ui_kit::tokens::sidebar)
+                    .child(navigator::sidebar())))
+            .child(resizable_panel()
+                .min_size(px(scratch_ui_kit::tokens::editor_min_w()))
+                .child(view().flex_1().min_w(px(0.0)).min_h(px(0.0)).flex_col()
+                    .child(workspace_panels())
+                    .child(chrome::status_bar())))
+            .child(resizable_panel()
+                .size(move || Some(px(display().with(|view| {
+                    if view.docs_expanded {
+                        (view.docs_width * 1.6).clamp(360.0, 600.0)
+                    } else {
+                        view.docs_width
+                    }
+                }))))
+                .size_range(px(scratch_ui_kit::tokens::docs_min_w())..px(600.0))
+                .visible(move || display().with(|view| view.docs_visible))
+                .on_resize(|size: &Points| {
+                    display().update(|view| {
+                        view.docs_width = size.0;
+                        view.docs_expanded = false;
+                    });
+                    with(|workspace| workspace.changed());
+                })
+                .child(docs::panel())))
         .child(find::overlay())
+        .child(edit::overlay())
         .child(diagnostics::overlay())
         .child(quick_open::overlay())
         .child(preferences::overlay())
         .child(run_settings::overlay())
         .child(lsp::overlay())
+        .child(chrome::overlay())
+        .child(debugger::overlay())
+        .child(search_sidebar::overlay())
+        .child(navigator::overlay())
+        .child(help::overlay())
 }
 
 /// The editors and the console. The console sits below the editors, or on
@@ -146,23 +193,76 @@ fn workspace_panels() -> impl IntoElement {
                 display().update(|view| if console::console_on_right() { view.console_width = size.0 } else { view.console_height = size.0 });
                 with(|workspace| workspace.changed());
             })
-            .child(view().flex_1().min_h(px(0.0)).min_w(px(0.0)).flex_row()
-                .child(when(debugger::pane_visible, debugger::pane))
-                .child(console::panel())))
+            .child(resizable_panel_group()
+                .axis(Axis::Horizontal)
+                .handle_class("bg-border")
+                .flex_1()
+                .min_h(px(0.0))
+                .min_w(px(0.0))
+                .child(resizable_panel()
+                    .size(move || Some(px(195.0)))
+                    .size_range(px(140.0)..px(380.0))
+                    .visible(debugger::pane_visible)
+                    .child(debugger::stack_pane()))
+                .child(resizable_panel()
+                    .size(move || Some(px(230.0)))
+                    .size_range(px(150.0)..px(460.0))
+                    .visible(debugger::pane_visible)
+                    .child(debugger::variables_pane()))
+                .child(resizable_panel()
+                    .min_size(px(180.0))
+                    .child(console::panel()))))
 }
 
 fn start() {
     // The app draws DESIGN 8.2's title band itself, so the document name and
     // the traffic lights share the top 32 pt. A hidden title bar changes the
     // window, which can re-mount the root; set it once per process.
-    static TITLE_BAR_SET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !TITLE_BAR_SET.swap(true, std::sync::atomic::Ordering::Relaxed) {
+    thread_local! {
+        static TITLE_BAR_SET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if !TITLE_BAR_SET.with(|set| set.replace(true)) {
         let mut attributes = nsh_core::desktop::WindowAttributes::default();
         let mut bar = nsh_core::desktop::TitleBarOptions::default();
         bar.style = nsh_core::desktop::TitleBarStyle::Hidden;
         bar.height = Some(Points(scratch_ui_kit::tokens::titlebar_h()));
         attributes.title_bar = Some(bar);
-        desktop::current_window().set(attributes);
+        let win = desktop::current_window();
+        win.set(attributes);
+        win.on_focus_change(|focused| {
+            display().update(|view| view.window_focused = focused);
+        });
+        win.on_bounds_change(|bounds| {
+            global::<state::WindowBoundsSignal>().set(state::WindowBoundsSignal(Some(persistence::SavedBounds {
+                x: bounds.origin.x.0,
+                y: bounds.origin.y.0,
+                width: bounds.size.width.0,
+                height: bounds.size.height.0,
+            })));
+            with(|workspace| workspace.changed());
+        });
+        native::enable_webview_developer_extras();
+        let _ = scratch_runner::warm_up();
+    }
+    let mut new_window = false;
+    let mut open_args: Vec<std::path::PathBuf> = Vec::new();
+    let mut handoff_args: Vec<std::path::PathBuf> = Vec::new();
+    let mut iter = std::env::args().skip(1);
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--new-window" => new_window = true,
+            "--open" => {
+                if let Some(p) = iter.next() {
+                    open_args.push(std::path::PathBuf::from(p));
+                }
+            }
+            "--handoff" => {
+                if let Some(p) = iter.next() {
+                    handoff_args.push(std::path::PathBuf::from(p));
+                }
+            }
+            _ => {}
+        }
     }
     let paths = std::env::var_os("SCRATCHRUNNER_DATA_DIR").map(Paths::in_dir).or_else(Paths::system);
     let Some(paths) = paths else {
@@ -180,26 +280,79 @@ fn start() {
                     _ => None,
                 }
             } else { None };
-            let (snapshot, warning) = persistence::restore(&paths);
-            (registry, snapshot, warning.or(language_error))
+            let (snapshot, warning) = if new_window {
+                (persistence::Snapshot::default(), None)
+            } else {
+                persistence::restore(&paths)
+            };
+            let mut handoffs = Vec::new();
+            for handoff in &handoff_args {
+                if let Ok(bytes) = std::fs::read(handoff) {
+                    if let Ok(doc) = serde_json::from_slice::<persistence::SavedDocument>(&bytes) {
+                        handoffs.push(doc);
+                    }
+                    let _ = std::fs::remove_file(handoff);
+                }
+            }
+            (registry, snapshot, warning.or(language_error), handoffs)
         }}).await;
-        let Ok((registry, snapshot, warning)) = loaded else {
+        let Ok((registry, snapshot, warning, handoffs)) = loaded else {
             display().update(|view| { view.loading = false; view.notice = "Recovery could not start.".into(); });
             return;
         };
-        with(|workspace| { workspace.registry = Some(registry); workspace.journal = Some(persistence::Journal::new(&paths)); workspace.paths = Some(paths); });
+        with(|workspace| {
+            workspace.registry = Some(registry);
+            workspace.journal = if new_window && handoffs.is_empty() { None } else { Some(persistence::Journal::new(&paths)) };
+            workspace.paths = Some(paths);
+        });
         global::<state::RegistryRevision>().update(|rev| rev.0 += 1);
+        let has_session_dir = !new_window && with(|workspace| workspace.paths.as_ref().is_some_and(|paths| {
+            let dir = paths.root().join("WorkbenchSessions");
+            dir.exists() && std::fs::read_dir(dir).ok().is_some_and(|mut entries| entries.next().is_some())
+        }));
+        let tab_bar_hidden = preferences::settings().with_untracked(|p| p.general.tabs.tab_bar_hidden);
         display().update(|view| {
             view.loading = false;
             view.console_visible = snapshot.console_visible;
             view.console_height = snapshot.console_height.clamp(96.0, 600.0);
+            view.console_right = snapshot.console_right;
+            view.console_width = snapshot.console_width.clamp(240.0, 900.0);
+            view.sidebar_visible = snapshot.sidebar_visible;
+            view.sidebar_width = snapshot.sidebar_width.clamp(180.0, 400.0);
+            view.docs_visible = snapshot.docs_visible;
+            view.docs_width = snapshot.docs_width.clamp(240.0, 600.0);
+            view.toolbar_visible = snapshot.toolbar_visible;
+            view.tab_bar_visible = if !has_session_dir && !new_window { !tab_bar_hidden } else { snapshot.tab_bar_visible };
             if let Some(warning) = warning { view.notice = warning; }
         });
+        if !new_window {
+            if let Some(bounds) = snapshot.window_bounds {
+                if bounds.width >= 500.0 && bounds.height >= 320.0 {
+                    global::<state::WindowBoundsSignal>().set(state::WindowBoundsSignal(Some(bounds)));
+                    desktop::current_window().set_bounds(nsh_core::desktop::WindowFrame {
+                        x: Some(px(bounds.x)),
+                        y: Some(px(bounds.y)),
+                        width: Some(px(bounds.width)),
+                        height: Some(px(bounds.height)),
+                        animated: Some(false),
+                    });
+                }
+            }
+        }
         let selected = snapshot.active;
         for document in snapshot.documents { state::add(document); }
-        let found = selected.filter(|id| with(|workspace| workspace.doc(*id).is_some()));
+        let keep_snapshot_active = handoffs.is_empty() && open_args.is_empty();
+        for document in handoffs { state::add(document); }
+        for path in open_args { files::open_path(path).await; }
+        let found = if keep_snapshot_active {
+            selected.filter(|id| with(|workspace| workspace.doc(*id).is_some()))
+        } else {
+            None
+        };
         if let Some(id) = found { state::activate(id); }
-        else if with(|workspace| workspace.documents.is_empty()) { state::new_document(); }
+        else if with(|workspace| workspace.documents.is_empty()) {
+            if !has_session_dir && !new_window { state::new_first_launch_document(); } else { state::new_document(); }
+        }
         else { state::publish(); }
     });
 }
@@ -261,7 +414,8 @@ fn install_menu() {
         native::set_min_window_size(500.0, 320.0);
         desktop::set_application_menu(Some(vec![
             MenuItem::submenu("ScratchRunner", [
-                MenuItem::role(MenuRole::About), MenuItem::separator(),
+                MenuItem::new("About ScratchRunner").on_select(help::open_about),
+                MenuItem::separator(),
                 item("Preferences…", "app.preferences", preferences::open),
                 // No updater ships with ScratchRunner: the item stays visible
                 // and disabled, as in CodeRunner with updates off.
@@ -272,6 +426,7 @@ fn install_menu() {
             ]),
             MenuItem::submenu("File", [
                 item("New Tab", "file.newTab", state::new_document),
+                item("New Window", "file.newWindow", files::new_window),
                 item("New Document from Language…", "sr.newFromLanguage", quick_open::new_document_palette),
                 new_from_template_menu(),
                 item("New from Clipboard", "file.newFromClipboard", files::new_from_clipboard),
@@ -308,7 +463,11 @@ fn install_menu() {
                 MenuItem::role(MenuRole::Paste),
                 MenuItem::new("Paste and Preserve Formatting").on_select(|| edit::run(nsh_base::EditorCommand::Paste)),
                 item("Delete", "edit.deleteForward", || edit::run(nsh_base::EditorCommand::DeleteForward)),
-                MenuItem::role(MenuRole::SelectAll), MenuItem::separator(),
+                MenuItem::role(MenuRole::SelectAll),
+                MenuItem::separator(),
+                item("Kill to Line End", "edit.killToLineEnd", edit::kill_to_line_end),
+                item("Yank", "edit.yank", edit::yank),
+                MenuItem::separator(),
                 // AppKit appends AutoFill / Start Dictation / Emoji & Symbols
                 // itself; declaring them here would duplicate the tail.
                 MenuItem::submenu("Spelling and Grammar", [
@@ -345,8 +504,9 @@ fn install_menu() {
                 vec![
                 item("Run", "run.run", execution::run_active).disabled(any_running || !can_run),
                 item("Run and Debug", "run.runAndDebug", debugger::run_in_debugger).disabled(any_running || !can_run),
-                item("Run Without Debugging", "run.runWithoutDebugging", execution::run_active).disabled(any_running || !can_run),
-                item(diagnostics_title, "run.runDiagnostics", diagnostics::run_diagnostics),
+                item("Run Without Debugging", "run.runWithoutDebugging", execution::run_without_debugging).disabled(any_running || !can_run),
+                item("Run Selection", "run.runSelection", execution::run_selection).disabled(any_running || !can_run),
+                item(diagnostics_title, "run.runDiagnostics", execution::compile_or_diagnostics),
                 item("Stop", "run.stop", execution::stop_active).disabled(!any_running),
                 MenuItem::separator(),
                 MenuItem::submenu("Debugger", [
@@ -369,18 +529,25 @@ fn install_menu() {
             }),
             MenuItem::submenu("View", {
                 let prefs = preferences::settings().get_untracked();
-                let (console_right, toolbar_visible, tab_bar_visible) = state::display()
-                    .with_untracked(|view| (view.console_right, view.toolbar_visible, view.tab_bar_visible));
-                let keyed = |title: String, id: &str, action: fn()| {
+                let (sidebar_visible, console_visible, console_right, docs_visible, toolbar_visible, tab_bar_visible) = state::display()
+                    .with_untracked(|view| (
+                        view.sidebar_visible,
+                        view.console_visible,
+                        view.console_right,
+                        view.docs_visible,
+                        view.toolbar_visible,
+                        view.tab_bar_visible,
+                    ));
+                let keyed = |title: &str, id: &str, action: fn()| {
                     let item = MenuItem::new(title).on_select(action);
                     let keys = bindings::keys_for(id);
                     if keys.is_empty() { item } else { item.shortcut(&keys) }
                 };
                 vec![
-                    keyed(if tab_bar_visible { "Hide Tab Bar" } else { "Show Tab Bar" }.to_owned(), "view.toggleTabBar", chrome::toggle_tab_bar),
-                    item("Show File Navigator", "view.toggleFileNavigator", chrome::toggle_navigator),
-                    item("Show Console", "view.toggleConsole", chrome::toggle_console),
-                    item("Show Documentation View", "view.toggleDocumentation", chrome::toggle_docs),
+                    keyed(if tab_bar_visible { "Hide Tab Bar" } else { "Show Tab Bar" }, "view.toggleTabBar", chrome::toggle_tab_bar),
+                    keyed(if sidebar_visible { "Hide File Navigator" } else { "Show File Navigator" }, "view.toggleFileNavigator", chrome::toggle_navigator),
+                    keyed(if console_visible { "Hide Console" } else { "Show Console" }, "view.toggleConsole", chrome::toggle_console),
+                    keyed(if docs_visible { "Hide Documentation View" } else { "Show Documentation View" }, "view.toggleDocumentation", chrome::toggle_docs),
                     MenuItem::separator(),
                     MenuItem::new("Automatically Hide Console")
                         .checked(prefs.general.console.hide_automatically)
@@ -390,7 +557,7 @@ fn install_menu() {
                         MenuItem::new("Right").checked(console_right).on_select(|| chrome::set_console_position(true)),
                     ]),
                     MenuItem::separator(),
-                    keyed(if toolbar_visible { "Hide Toolbar" } else { "Show Toolbar" }.to_owned(), "view.toggleToolbar", chrome::toggle_toolbar),
+                    keyed(if toolbar_visible { "Hide Toolbar" } else { "Show Toolbar" }, "view.toggleToolbar", chrome::toggle_toolbar),
                     // The system appends Enter Full Screen ⌃⌘F itself —
                     // a custom item can't carry the OS-reserved keystroke.
                 ]
@@ -417,6 +584,7 @@ fn install_menu() {
                     item("Select Next Tab", "window.selectNextTab", || state::step_tab(1)),
                     item("Move Tab Left", "window.moveTabLeft", || state::move_active_tab(-1)),
                     item("Move Tab Right", "window.moveTabRight", || state::move_active_tab(1)),
+                    MenuItem::new("Move Tab to New Window").disabled(display().with_untracked(|view| view.tabs.len() < 2)).on_select(files::move_active_tab_to_new_window),
                     MenuItem::new("Merge All Windows").on_select(native::merge_all_windows),
                     MenuItem::separator(),
                     MenuItem::new("Bring All to Front").on_select(native::bring_all_to_front),
@@ -431,7 +599,7 @@ fn install_menu() {
                 MenuItem::submenu("Window", window_items)
             },
             MenuItem::submenu("Help", [
-                item("ScratchRunner Help", "help.help", chrome::toggle_docs),
+                item("ScratchRunner Help", "help.help", help::open_help),
                 MenuItem::new("CodeRunner Documentation").on_select(|| open_site("https://coderunnerapp.com/docs")),
                 MenuItem::separator(),
                 MenuItem::new("Visit CodeRunner Website").on_select(|| open_site("https://coderunnerapp.com")),
@@ -526,7 +694,7 @@ fn install_keys() {
     // Re-registered when the key bindings change: the pane's records apply at once.
     effect(|| {
         global::<bindings::BindingsRevision>().get();
-        bindings::on("file.newWindow", state::new_document);
+        bindings::on("file.newWindow", files::new_window);
         bindings::on("file.newTab", state::new_document);
         bindings::on("file.open", files::open_dialog);
         bindings::on("file.openQuickly", quick_open::open);
@@ -550,7 +718,8 @@ fn install_keys() {
         bindings::on("run.editLanguages", || preferences::open_pane(preferences::Category::Languages));
         bindings::on("sr.newFromLanguage", quick_open::new_document_palette);
         bindings::on("run.runAndDebug", debugger::run_in_debugger);
-        bindings::on("run.runWithoutDebugging", execution::run_active);
+        bindings::on("run.runWithoutDebugging", execution::run_without_debugging);
+        bindings::on("run.runSelection", execution::run_selection);
         bindings::on("sr.stopDebugging", debugger::stop);
         bindings::on("debug.toggleBreakpoint", debugger::toggle_breakpoint_at_caret);
         bindings::on("debug.clearBreakpoints", debugger::clear_breakpoints);
@@ -574,25 +743,29 @@ fn install_keys() {
         bindings::on("text.surround.parentheses", || edit::surround("(", ")"));
         bindings::on("text.surround.braces", || edit::surround("{", "}"));
         bindings::on("text.surround.brackets", || edit::surround("[", "]"));
-        bindings::on("file.closeOtherTabs", files::close_other_tabs);
-        bindings::on("file.closeWindow", native::close_window);
-        bindings::on("file.closeWithoutSaving", files::close_active_without_saving);
-        bindings::on("file.newFromClipboard", files::new_from_clipboard);
-        bindings::on("file.goToCurrentDocument", files::go_to_current_document);
         bindings::on("file.duplicate", files::duplicate_active);
         bindings::on("file.rename", files::rename_active);
         bindings::on("file.moveTo", files::move_active);
         bindings::on("file.pageSetup", native::page_setup);
         bindings::on("file.revertToSaved", files::revert_active);
         bindings::on("run.selectLanguage", quick_open::select_language);
-        bindings::on("help.help", chrome::toggle_docs);
-        for n in 1..=9 {
+        bindings::on("window.selectPreviousTab", || state::step_tab(-1));
+        bindings::on("window.selectNextTab", || state::step_tab(1));
+        bindings::on("window.moveTabLeft", || state::move_active_tab(-1));
+        bindings::on("window.moveTabRight", || state::move_active_tab(1));
+        bindings::on("help.help", help::open_help);
+        for n in 1..=10 {
             bindings::on(&format!("window.selectTab{n}"), move || {
                 let id = display().with_untracked(|view| view.tabs.get(n - 1).map(|tab| tab.id));
                 if let Some(id) = id { state::activate(id); }
             });
         }
-        // The sets' compound-command triggers feed the editor wrappers.
+    });
+    // Compound-command triggers follow bindings, editor focus, read-only locks,
+    // and find-field focus independently of menu-shortcut registration.
+    effect(|| {
+        global::<bindings::BindingsRevision>().get();
+        let _ = global::<EditorFocus>().get();
         compound::refresh();
     });
     // The editor registers Cmd-. on focus. Register after each focus change so
@@ -604,8 +777,16 @@ fn install_keys() {
 }
 
 fn editors() -> impl IntoElement {
-    view().flex_1().min_h(px(0.0))
-        .child(when(move || display().with(|view| view.loading), || text("Restoring documents…").p_4()))
+    view().flex_1().min_h(px(0.0)).bg(scratch_ui_kit::tokens::editor_bg)
+        .child(when(move || display().with(|view| view.loading), || text("Restoring documents…").p_4().text_color(scratch_ui_kit::tokens::muted_foreground)))
+        .child(when(move || display().with(|view| !view.loading && view.tabs.is_empty()), || {
+            view().flex_1().items_center().justify_center().gap_2()
+                .child(text("No Open Document").text_base().font_weight(FontWeight::MEDIUM).text_color(scratch_ui_kit::tokens::muted_foreground))
+                .child(text("Create a new tab (⌘T) or open a file (⌘O).").text_xs().text_color(scratch_ui_kit::tokens::muted_foreground))
+                .child(view().flex_row().gap_2().pt_2()
+                    .child(scratch_ui_kit::primitives::button("New Tab", scratch_ui_kit::primitives::ButtonOptions::new().size(scratch_ui_kit::primitives::ControlSize::Sm), state::new_document))
+                    .child(scratch_ui_kit::primitives::button("Open…", scratch_ui_kit::primitives::ButtonOptions::new().size(scratch_ui_kit::primitives::ControlSize::Sm), files::open_dialog)))
+        }))
         .child(each(move || display().with(|view| view.tabs.clone()), |tab: &state::Tab| tab.id, |row, _| {
             let tab = row.get_untracked();
             let id = tab.id;
@@ -619,6 +800,12 @@ fn editors() -> impl IntoElement {
                     .accessibility_label(format!("Editor for {}", tab.title))
                     .line_numbers(move || settings.with(|settings| settings.text_editing.appearance.line_numbers.enabled))
                     .soft_wrap(move || settings.with(|settings| settings.text_editing.appearance.wrap_lines))
+                    .tab_size(move || Some(settings.with(|settings| settings.text_editing.indentation.tab_width.max(1))))
+                    .hard_tabs(move || Some(!settings.with(|settings| settings.text_editing.indentation.soft_tabs)))
+                    .auto_close(move || settings.with(|settings| settings.text_editing.behavior.character_pairs.close_enabled))
+                    .auto_indent(move || settings.with(|settings| settings.text_editing.indentation.auto_indent_while_typing))
+                    .folding(true)
+                    .indent_guides(true)
                     .font_size(move || px(settings.with(|settings| settings.text_editing.appearance.font.size) as f32))
                     .font_family(move || Some(SharedString::from(settings.with(|settings| {
                         // A family that is not installed (a stale import)
@@ -643,10 +830,12 @@ fn editors() -> impl IntoElement {
                     .gutter_decorations_width(px(5.0))
                     .on_line_number_press(move |line: &u32| state::toggle_breakpoint(id, *line))
                     .on_context_menu(move |e: &nsh_base::EditorContextMenuEvent| {
-                        drop(desktop::popup_menu_at(edit::context_menu(), point(e.x, e.y)));
+                        drop(desktop::popup_menu_at(edit::context_menu_for(id, e.position.line), point(e.x, e.y)));
                     })
                     .search(find::editor_search)
+                    .on_find_with_selection(move |query: &String| find::use_selection_text(query))
                     .on_search_change(move |result: &nsh_base::EditorSearchResult| find::search_changed(id, result))
+                    .on_selection_change(move |selections: &Vec<nsh_base::EditorSelection>| chrome::selection_changed(id, selections))
                     .component_ref(&handle).flex_1().min_h(px(0.0))
                     .on_change(move |text: &SharedString| state::edited(id, text))
                     , id))

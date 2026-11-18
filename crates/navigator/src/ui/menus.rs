@@ -48,10 +48,13 @@ pub fn navigator_menu(store: Store, row: Option<EntryId>) -> Vec<MenuItem> {
     items.push(
         MenuItem::new("Open in New Window")
             .disabled(!has_sel)
-            .on_select(move || {
-                store
-                    .status
-                    .set("Open in New Window is not available".into());
+            .on_select({
+                let p = path_for_actions.clone();
+                move || {
+                    if let Some(p) = p.clone() {
+                        store.trigger_open_new_window(p);
+                    }
+                }
             }),
     );
     items.push(
@@ -86,10 +89,23 @@ pub fn navigator_menu(store: Store, row: Option<EntryId>) -> Vec<MenuItem> {
         }
     }));
     items.push(MenuItem::separator());
-    items.push(MenuItem::new(search_label).on_select(move || {
-        store
-            .status
-            .set("Search...: switches the sidebar to the search tab".into());
+    items.push(MenuItem::new(search_label).on_select({
+        let p = path_for_actions.clone();
+        move || {
+            if multi {
+                store.trigger_search_selection(store.selected_paths());
+                return;
+            }
+            let dir = match &p {
+                Some(p) if p.is_dir() => p.clone(),
+                Some(p) => p
+                    .parent()
+                    .map(|x| x.to_path_buf())
+                    .unwrap_or_else(|| store.root_path()),
+                None => store.root_path(),
+            };
+            store.trigger_search_folder(dir);
+        }
     }));
     items.push(MenuItem::separator());
     items.push(MenuItem::new("New File").on_select(move || store.begin_new(Kind::File)));
@@ -99,14 +115,16 @@ pub fn navigator_menu(store: Store, row: Option<EntryId>) -> Vec<MenuItem> {
             .on_select(move || store.begin_new(Kind::Dir)),
     );
     items.push(MenuItem::new("Go to Folder...").on_select(move || {
-        store.task(async move {
-            let picked = pick_paths(nsh_core::file_dialog::OpenDialog::folders()).await;
-            if let Ok(Some(v)) = picked
-                && let Some(p) = v.first()
-            {
-                store.go(p);
-            }
-        });
+        if !store.trigger_go_to_folder() {
+            store.task(async move {
+                let picked = pick_paths(nsh_core::file_dialog::OpenDialog::folders()).await;
+                if let Ok(Some(v)) = picked
+                    && let Some(p) = v.first()
+                {
+                    store.go(p);
+                }
+            });
+        }
     }));
     items.push(MenuItem::new("Refresh").on_select(move || {
         let dirs = store.tree.with(|t| t.loaded_dirs());

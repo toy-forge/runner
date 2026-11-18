@@ -1,0 +1,47 @@
+# Xdebug (DBGp command-line client) for PHP debugging.
+id = "xdebug"
+name = "PHP (Xdebug)"
+languages = ["php"]
+prompt = '(?m)^\(xdebug\) $'
+termination = '(?m)^Program finished'
+ignore = '^\s*$'
+install_hint = "PHP Xdebug debugging requires Xdebug (`pecl install xdebug`) and `dbgpclient` from xdebug.org."
+
+[start]
+program = "dbgpclient"
+args = ["127.0.0.1", "{port}", "(xdebug) "]
+pty = false
+server = ["php", "-d", "xdebug.mode=debug", "-d", "xdebug.client_port={port}", "-d", "xdebug.start_with_request=yes", "{program}", "{program_args}"]
+
+[parsers]
+kind = "generic"
+stop_location = '(?m)(?<file>(?:/|[A-Za-z]:\\)[^\s:]+|\S+\.php):(?<line>\d+)'
+frames = '(?m)^\s*#?(?<index>\d+)\s+(?<function>\S+)\s+(?<file>[^\r\n:]+):(?<line>\d+)'
+breakpoint_set = '(?m)breakpoint_set.*id="(?<id>\d+)"'
+variables = '(?m)^\s*\$(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>[^\r\n]*)$'
+
+[options]
+prompt_means_paused = true
+requires_paused_commands = true
+supports_pause = false
+pause_with_signal = false
+echo = "none"
+default_depth = 2
+max_children = 100
+
+[commands]
+launch = "run -i 1"
+continue = "run -i 1"
+step_over = "step_over -i 1"
+step_in = "step_into -i 1"
+step_out = "step_out -i 1"
+breakpoint_set = "breakpoint_set -i 1 -t line -f {file} -n {line}{condition_clause}"
+condition_clause = " -- {qcondition}"
+breakpoint_clear = "breakpoint_remove -i 1 -d {id}"
+breakpoint_clear_all = ""
+breakpoint_list = "breakpoint_list -i 1"
+backtrace = "stack_get -i 1"
+variables = "context_get -i 1"
+evaluate = "eval -- {expr}"
+set_variable = "eval -- {path} = {value}"
+quit = "stop -i 1"

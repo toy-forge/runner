@@ -2,18 +2,41 @@
 //! the selected language definition and the editor's current buffer; the
 //! output goes into the document's console model, stream-tagged.
 
+use std::time::Duration;
+
 use nsh_core::prelude::*;
 use scratch_console_model::Stream as ConsoleStream;
 use scratch_document::{Document, DocumentId};
 use scratch_language::LanguageDef;
-use scratch_runner::{OnBusy, RunEvent, RunMessage, RunRequest, Snapshot, Stream, RunStatus};
+use scratch_runner::{
+    OnBusy, PathSetting, RunError, RunEvent, RunHandle, RunMessage, RunMode, RunRequest,
+    RunStatus, ShellSettings, Snapshot, Stream,
+};
 use scratch_ui_kit::motion;
 use tokio::sync::mpsc;
 
-use super::state::{self, with};
+use super::state::{self, RunOutcome, with};
 
-/// Constructs a run without reading the file on disk. This is the integration
-/// seam for future run settings and debugger UI.
+/// Global shell & advanced build preferences for runner requests.
+pub(super) fn current_shell_settings() -> ShellSettings {
+    super::preferences::settings().with_untracked(|p| ShellSettings {
+        shell: p.shell.shell.clone(),
+        login_shell: p.shell.run_as_login_shell,
+        path: if p.shell.automatically_determine_path {
+            PathSetting::Automatic
+        } else {
+            PathSetting::Custom(p.shell.path.clone())
+        },
+        variables: p.shell.environment.clone(),
+        shell_arguments: p.shell.arguments.clone(),
+        compile_shell_arguments: p.shell.compile_arguments.clone(),
+        compiler_output_in_temp_dir: p.advanced.write_compiler_output_to_temp_dir,
+        ..ShellSettings::default()
+    })
+}
+
+/// Constructs a run without reading the file on disk. Kept free of NSH global
+/// state so unit tests can invoke it directly.
 pub fn request_for(document: &Document, title: &str, source: String, language: &LanguageDef) -> RunRequest {
     let snapshot = Snapshot::Text {
         text: source,
@@ -24,15 +47,122 @@ pub fn request_for(document: &Document, title: &str, source: String, language: &
     RunRequest::new(language, snapshot).with_settings(settings).with_owner(document.id.to_string(), OnBusy::Reject)
 }
 
+fn language_has_debugger(workspace: &super::state::Workspace, language_id: &str) -> bool {
+    let adapters = scratch_debugger::AdapterRegistry::builtin();
+    let preferred = workspace
+        .registry
+        .as_ref()
+        .and_then(|r| r.get(language_id))
+        .and_then(|def| def.debugger.as_deref());
+    preferred
+        .and_then(|id| adapters.get(id))
+        .or_else(|| adapters.for_language(language_id))
+        .is_some()
+}
+
+/// Primary Run (`⌘R`): automatically enters debugger if enabled breakpoints
+/// exist and a debugger adapter is registered for the active language.
 pub fn run_active() {
+    let should_debug = with(|workspace| {
+        let id = workspace.active?;
+        let doc = workspace.doc(id)?;
+        let has_bp = doc.document.breakpoints.as_slice().iter().any(|bp| bp.enabled);
+        let has_dbg = language_has_debugger(workspace, &doc.document.language);
+        Some(has_bp && has_dbg)
+    }).unwrap_or(false);
+    if should_debug {
+        super::debugger::run_in_debugger();
+    } else {
+        run_with_mode(RunMode::Run, None);
+    }
+}
+
+/// Run Without Debugging (`⌃⌘R`): always executes without attaching debugger.
+pub fn run_without_debugging() {
+    run_with_mode(RunMode::RunWithoutDebugging, None);
+}
+
+/// Compile or Run Diagnostics (`⌘B`): runs CompileOnly for compiled languages,
+/// otherwise executes manual diagnostics jobs.
+pub fn compile_or_diagnostics() {
+    let compiles = with(|workspace| {
+        workspace.active
+            .and_then(|id| workspace.doc(id))
+            .and_then(|doc| workspace.registry.as_ref().and_then(|r| r.get(&doc.document.language)))
+            .is_some_and(|def| def.has_compile_step())
+    });
+    if compiles {
+        run_with_mode(RunMode::CompileOnly, None);
+    } else {
+        super::diagnostics::run_diagnostics();
+    }
+}
+
+/// Run Selection (`⇧⌃⌘R`): executes the selected text (or current line).
+pub fn run_selection() {
     let Some(id) = with(|workspace| workspace.active) else { return; };
-    let Some(source) = state::text(id) else { return; };
+    let Some(api) = state::editor_api(id) else { return; };
+    let full = api.value();
+    let selections = api.selections();
+    let selected = if let Some(sel) = selections.last() {
+        let lines: Vec<&str> = full.split('\n').collect();
+        if sel.anchor == sel.head {
+            lines.get(sel.head.line as usize).copied().unwrap_or_default().to_owned()
+        } else {
+            let (start, end) = if (sel.anchor.line, sel.anchor.column) <= (sel.head.line, sel.head.column) {
+                (sel.anchor, sel.head)
+            } else {
+                (sel.head, sel.anchor)
+            };
+            let offset_of = |pos: nsh_base::EditorPosition| -> usize {
+                let mut offset = 0usize;
+                for (i, line) in full.split('\n').enumerate() {
+                    if i == pos.line as usize {
+                        let bytes = scratch_search::utf16_to_byte(line, pos.column as usize);
+                        return (offset + bytes).min(full.len());
+                    }
+                    offset += line.len() + 1;
+                }
+                full.len()
+            };
+            let a = offset_of(start);
+            let b = offset_of(end);
+            full[a.min(b)..a.max(b)].to_owned()
+        }
+    } else {
+        full
+    };
+    if selected.trim().is_empty() {
+        state::notice("Select code to run.");
+        return;
+    }
+    run_with_mode(RunMode::RunWithoutDebugging, Some(selected));
+}
+
+fn run_with_mode(mode: RunMode, override_source: Option<String>) {
+    let Some(id) = with(|workspace| workspace.active) else { return; };
+    if super::debugger::debugging(id) {
+        super::debugger::stop();
+    }
+    let source = match override_source {
+        Some(text) => text,
+        None => match state::text(id) {
+            Some(text) => text,
+            None => return,
+        },
+    };
     let prepared = with(|workspace| {
         let doc = workspace.doc(id)?;
-        let language = workspace.registry.as_ref()?.get(&doc.document.language)?;
-        Some((request_for(&doc.document, &doc.title, source, language), workspace.runner.clone(), doc.status, doc.running))
+        let language = workspace.registry.as_ref()?.get(&doc.document.language)?.clone();
+        let request = request_for(&doc.document, &doc.title, source, &language)
+            .with_mode(mode)
+            .with_shell(current_shell_settings());
+        Some((request, language, doc.title.clone(), workspace.runner.clone(), doc.status, doc.run_stats, doc.exit_info, doc.running))
     });
-    let Some((request, runner, status, running)) = prepared else { state::notice("Choose a language before running."); return; };
+    let Some((request, language, title, runner, status, run_stats, exit_info, running)) = prepared else {
+        state::notice("Choose a language before running.");
+        return;
+    };
     if request.language.run.command.trim().is_empty() && request.language.console.renderer.is_none() {
         state::notice("This language has no run command.");
         return;
@@ -46,6 +176,8 @@ pub fn run_active() {
                 doc.console.write_line(ConsoleStream::System, "Rendered.");
             }
         });
+        run_stats.set(None);
+        exit_info.set(None);
         status.set("Rendered".into());
         running.set(false);
         changed(id);
@@ -54,10 +186,14 @@ pub fn run_active() {
         with(|workspace| workspace.changed());
         return;
     }
+    if mode != RunMode::CompileOnly {
+        super::diagnostics::on_run(id);
+    }
     let (tx, rx) = mpsc::unbounded_channel();
     match runner.start(request, move |message| { let _ = tx.send(message); }) {
         Ok(handle) => {
             let run_id = handle.id();
+            let handle_for_stats = handle.clone();
             with(|workspace| {
                 if let Some(doc) = workspace.doc_mut(id) {
                     doc.console.clear();
@@ -67,7 +203,9 @@ pub fn run_active() {
                 }
             });
             state::bump_diag_rev(id);
-            status.set("Preparing…".into());
+            run_stats.set(None);
+            exit_info.set(None);
+            status.set(if mode == RunMode::CompileOnly { "Compiling…" } else { "Preparing…" }.into());
             running.set(true);
             changed(id);
             motion::animate_panel();
@@ -76,14 +214,49 @@ pub fn run_active() {
             // Detached: the menu bar rebuilds on `running` changes, disposing
             // the owner this menu dispatch ran under — an owned task would be
             // cancelled before its first poll.
-            Owner::detached().run(|| spawn(pump(id, run_id, rx)));
+            Owner::detached().run(|| {
+                spawn(pump(id, run_id, title, language.install_hint(), rx));
+                spawn(sample_stats_loop(id, run_id, run_stats, handle_for_stats));
+            });
         }
         Err(error) => state::notice(format!("Could not start: {error}")),
     }
 }
 
+async fn sample_stats_loop(
+    id: DocumentId,
+    run_id: scratch_runner::RunId,
+    run_stats: Signal<Option<(f32, u64)>>,
+    handle: RunHandle,
+) {
+    loop {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let still_current = with(|workspace| {
+            workspace.doc(id).is_some_and(|doc| {
+                doc.handle.as_ref().is_some_and(|h| h.id() == run_id) && doc.running.get_untracked()
+            })
+        });
+        if !still_current {
+            run_stats.set(None);
+            return;
+        }
+        let sampled = blocking({
+            let handle = handle.clone();
+            move || handle.sample_stats()
+        }).await.ok().flatten();
+        if let Some(stats) = sampled {
+            run_stats.set(Some((stats.cpu_percent, stats.rss_bytes)));
+        }
+    }
+}
+
 pub fn stop_active() {
-    if let Some(handle) = with(|workspace| workspace.active.and_then(|id| workspace.doc(id)?.handle.clone())) { handle.cancel(); }
+    if let Some(handle) = with(|workspace| workspace.active.and_then(|id| workspace.doc(id)?.handle.clone())) {
+        handle.cancel();
+    }
+    if with(|workspace| workspace.active).is_some_and(super::debugger::debugging) {
+        super::debugger::stop();
+    }
 }
 
 /// Sends one line of input to the active document's running process, and
@@ -132,7 +305,14 @@ fn write(id: DocumentId, stream: ConsoleStream, text: &str) {
     changed(id);
 }
 
-async fn pump(id: DocumentId, run_id: scratch_runner::RunId, mut events: mpsc::UnboundedReceiver<RunMessage>) {
+async fn pump(
+    id: DocumentId,
+    run_id: scratch_runner::RunId,
+    title: String,
+    install_hint: Option<String>,
+    mut events: mpsc::UnboundedReceiver<RunMessage>,
+) {
+    let mut prompted_large_output = false;
     'outer: while let Some(message) = events.recv().await {
         let current = with(|workspace| workspace.doc(id).is_some_and(|doc| doc.handle.as_ref().map(|h| h.id()) == Some(run_id)));
         if !current { return; }
@@ -154,6 +334,36 @@ async fn pump(id: DocumentId, run_id: scratch_runner::RunId, mut events: mpsc::U
             RunEvent::Preparing => status(id, "Preparing…"),
             RunEvent::StageStarted(stage) => status(id, &format!("{}…", stage.name)),
             RunEvent::Started(_) => status(id, "Running…"),
+            RunEvent::LargeOutput { bytes } => {
+                if !prompted_large_output {
+                    prompted_large_output = true;
+                    let mb = bytes as f64 / (1024.0 * 1024.0);
+                    let handle = with(|workspace| workspace.doc(id).and_then(|d| d.handle.clone()));
+                    if let Some(handle) = handle {
+                        let alert_title = title.clone();
+                        Owner::detached().run(move || spawn(async move {
+                            let choice = nsh_base::alert_dialog()
+                                .title("Large Output Warning")
+                                .description(format!(
+                                    "\"{alert_title}\" has produced {mb:.1} MB of output. Continue or stop the run?"
+                                ))
+                                .action("continue", "Continue")
+                                .cancel("stop", "Stop")
+                                .show()
+                                .await;
+                            if choice.ok().and_then(|r| r.action).as_deref() == Some("continue") {
+                                handle.allow_large_output();
+                            } else {
+                                handle.cancel();
+                            }
+                        }));
+                    }
+                }
+            }
+            RunEvent::Compiled(program) => {
+                let target = program.compiler.as_deref().unwrap_or("compiled binary");
+                write(id, ConsoleStream::System, &format!("Compiled: {target}"));
+            }
             RunEvent::Truncated { .. } => write(id, ConsoleStream::System, "[Output truncated by run limit]"),
             RunEvent::Finished(summary) => {
                 with(|workspace| { if let Some(doc) = workspace.doc_mut(id) { doc.console.finish_streams(); } });
@@ -162,6 +372,22 @@ async fn pump(id: DocumentId, run_id: scratch_runner::RunId, mut events: mpsc::U
                 let produced_output = with(|workspace| workspace.doc(id).map(|doc| doc.console.line_count() > 0).unwrap_or(false));
                 if let Some(message) = &summary.message { write(id, ConsoleStream::System, message); }
                 if let RunStatus::Error(error) = &summary.status { write(id, ConsoleStream::Stderr, &error.to_string()); }
+                let exit_code = match &summary.status {
+                    RunStatus::Exit(code) => Some(*code),
+                    RunStatus::CompileFailed { exit_code, .. } => *exit_code,
+                    RunStatus::Compiled => Some(0),
+                    _ => None,
+                };
+                let missing_tool = exit_code == Some(127)
+                    || matches!(summary.status, RunStatus::Error(RunError::MissingTool { .. } | RunError::DeveloperToolsMissing { .. } | RunError::PythonMissing { .. }));
+                if missing_tool {
+                    if let Some(hint) = &install_hint {
+                        if summary.message.as_ref().is_none_or(|m| !m.contains(hint)) {
+                            write(id, ConsoleStream::System, hint);
+                        }
+                        state::notice(hint.clone());
+                    }
+                }
                 // CodeRunner's footer: the end state, the exit status (or
                 // signal) and the wall time.
                 let detail = match &summary.status {
@@ -170,14 +396,24 @@ async fn pump(id: DocumentId, run_id: scratch_runner::RunId, mut events: mpsc::U
                     RunStatus::CompileFailed { exit_code: Some(code), .. } => format!(" · Exit Status {code}"),
                     _ => String::new(),
                 };
-                let line = format!("{}{} · {:.2}s", summary.status_text(), detail, summary.total_wall.as_secs_f64());
+                let duration_secs = summary.total_wall.as_secs_f64();
+                let line = format!("{}{} · {:.2}s", summary.status_text(), detail, duration_secs);
                 write(id, ConsoleStream::System, &line);
-                finish(id, run_id, &line);
+                let outcome = RunOutcome {
+                    code: exit_code,
+                    duration_secs,
+                    canceled: matches!(summary.status, RunStatus::Cancelled),
+                    command_not_found: missing_tool,
+                };
+                finish(id, run_id, &line, Some(outcome));
                 import_diagnostics(id);
+                if !state::display().with_untracked(|v| v.window_focused) {
+                    state::notice(format!("{title}: {line}"));
+                }
                 // "Automatically Hide Console": a clean finish with no output
                 // dismisses the console; output or a failure keeps it up.
                 if !produced_output
-                    && matches!(summary.status, RunStatus::Exit(0))
+                    && matches!(summary.status, RunStatus::Exit(0) | RunStatus::Compiled)
                     && super::preferences::settings().with_untracked(|p| p.general.console.hide_automatically)
                 {
                     motion::animate_panel();
@@ -192,7 +428,7 @@ async fn pump(id: DocumentId, run_id: scratch_runner::RunId, mut events: mpsc::U
         if dirty { changed(id); }
         continue 'outer;
     }
-    finish(id, run_id, "Run disconnected");
+    finish(id, run_id, "Run disconnected", None);
 }
 
 pub(super) fn status(id: DocumentId, text: &str) {
@@ -204,7 +440,7 @@ pub(super) fn status(id: DocumentId, text: &str) {
 /// "Include errors from the console in the editor"): compiler errors,
 /// Python tracebacks, rustc/go/clang/javac/node formats, placed in the
 /// document's text by `scratch-diagnostics`.
-fn import_diagnostics(id: DocumentId) {
+pub(super) fn import_diagnostics(id: DocumentId) {
     use scratch_diagnostics::{DocumentContext, console};
     let parsed = with(|workspace| {
         let doc = workspace.doc(id)?;
@@ -263,14 +499,16 @@ fn import_diagnostics(id: DocumentId) {
 }
 
 /// Ends a run: clears its handle and the running state, and sets the status.
-fn finish(id: DocumentId, run_id: scratch_runner::RunId, text: &str) {
+fn finish(id: DocumentId, run_id: scratch_runner::RunId, text: &str, outcome: Option<RunOutcome>) {
     let signals = with(|workspace| {
         let doc = workspace.doc_mut(id)?;
         if doc.handle.as_ref().map(|h| h.id()) == Some(run_id) { doc.handle = None; }
-        Some((doc.status, doc.running))
+        Some((doc.status, doc.run_stats, doc.exit_info, doc.running))
     });
-    if let Some((status, running)) = signals {
+    if let Some((status, run_stats, exit_info, running)) = signals {
         status.set(text.to_owned());
+        run_stats.set(None);
+        exit_info.set(outcome);
         running.set(false);
     }
 }

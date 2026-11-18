@@ -2,7 +2,10 @@
 //! (new file/folder, go to folder, filter).
 
 use nsh_core::{
-    element::{ImageSrc, desktop::popup_menu_at},
+    element::{
+        ImageSrc,
+        desktop::{MenuItem, popup_menu_at},
+    },
     prelude::*,
 };
 
@@ -97,7 +100,7 @@ pub fn footer(store: Store) -> impl IntoElement {
         .flex_1()
         .min_w(px(0.0));
     view()
-        .h(px(30.0))
+        .h(px(24.0))
         .flex_row()
         .items_center()
         .gap(px(2.0))
@@ -105,11 +108,25 @@ pub fn footer(store: Store) -> impl IntoElement {
         .flex_shrink(0.0)
         .border_t_1()
         .border_t_color(theme::separator)
-        .child(controls::icon_button(
-            icons::chrome::PLUS,
-            "New File",
-            move |_| store.begin_new(Kind::File),
-        ))
+        .child(
+            view()
+                .on_context_menu(move |e: &ContextMenuEvent| {
+                    let dir = store.root_path();
+                    let items = vec![
+                        MenuItem::new("New Empty File").on_select(move || store.begin_new(Kind::File)),
+                        MenuItem::new("New Folder").on_select(move || store.begin_new(Kind::Dir)),
+                        MenuItem::new("New from Active Template…").on_select(move || {
+                            if !store.trigger_new_from_template(dir.clone()) {
+                                store.begin_new(Kind::File);
+                            }
+                        }),
+                    ];
+                    drop(popup_menu_at(items, e.page_position));
+                })
+                .child(controls::icon_button(icons::chrome::PLUS, "New File", move |_| {
+                    store.begin_new(Kind::File)
+                })),
+        )
         .child(controls::icon_button(
             icons::chrome::FOLDER_PLUS,
             "Create New Folder",
@@ -119,14 +136,16 @@ pub fn footer(store: Store) -> impl IntoElement {
             icons::chrome::GOTO,
             "Go to Folder",
             move |_| {
-                store.task(async move {
-                    let picked = pick_paths(nsh_core::file_dialog::OpenDialog::folders()).await;
-                    if let Ok(Some(v)) = picked
-                        && let Some(p) = v.first()
-                    {
-                        store.go(p);
-                    }
-                });
+                if !store.trigger_go_to_folder() {
+                    store.task(async move {
+                        let picked = pick_paths(nsh_core::file_dialog::OpenDialog::folders()).await;
+                        if let Ok(Some(v)) = picked
+                            && let Some(p) = v.first()
+                        {
+                            store.go(p);
+                        }
+                    });
+                }
             },
         ))
         .child(filter)

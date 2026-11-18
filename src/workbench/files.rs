@@ -23,6 +23,16 @@ pub fn open_dialog() {
 pub async fn open_path(path: PathBuf) {
     let existing = with(|workspace| workspace.documents.iter().find(|doc| state::saved_path(&doc.document).as_deref() == Some(&path)).map(|doc| doc.document.id));
     if let Some(id) = existing { state::activate(id); return; }
+    let replace_candidate = if super::preferences::settings().with(|p| p.advanced.replace_untitled_document) {
+        with(|workspace| {
+            (workspace.documents.len() == 1).then(|| workspace.documents.first())
+                .flatten()
+                .filter(|doc| doc.document.untitled && doc.document.pristine)
+                .map(|doc| doc.document.id)
+        })
+    } else {
+        None
+    };
     let source = path.clone();
     let loaded = match blocking(move || load_text(&source, &ReadOptions::default())).await {
         Ok(Ok(loaded)) => loaded,
@@ -34,21 +44,86 @@ pub async fn open_path(path: PathBuf) {
         let document = Document::from_file(&path, &loaded, &FileMeta::default(), registry, now_ms());
         Some(SavedDocument { document, title: state::path_title(&path), text: loaded.text, diagnostics: None })
     });
-    if let Some(saved) = saved { let id = state::add(saved); state::focus(id); }
+    if let Some(saved) = saved {
+        let id = state::add(saved);
+        if let Some(old) = replace_candidate {
+            state::remove(old);
+        }
+        state::focus(id);
+    }
+}
+
+pub fn new_window() {
+    super::native::spawn_window(&[]);
+}
+
+pub fn move_active_tab_to_new_window() {
+    let Some(id) = with(|workspace| workspace.active) else { return; };
+    if display_tabs_len() < 2 {
+        return;
+    }
+    let busy = with(|workspace| {
+        workspace
+            .doc(id)
+            .map(|doc| (doc.saving, doc.running.get() || doc.handle.is_some()))
+    });
+    match busy {
+        Some((true, _)) => {
+            state::notice("Wait for the save to finish before moving this document to a new window.");
+            return;
+        }
+        Some((_, true)) => {
+            state::notice("Stop the running script before moving this document to a new window.");
+            return;
+        }
+        None => return,
+        _ => {}
+    }
+    super::native::spawn_detached_doc(id);
+}
+
+fn display_tabs_len() -> usize {
+    super::state::display().with_untracked(|v| v.tabs.len())
 }
 
 /// Opens a file and places the caret on `line` (1-based), for search results
 /// and `file:line` links.
 pub async fn open_path_at(path: PathBuf, line: u32) {
-    open_path(path).await;
-    let Some(id) = with(|workspace| workspace.active) else { return; };
-    next_frame().await;
-    next_frame().await;
+    let target = nsh_base::EditorPosition::new(line.saturating_sub(1), 0);
+    open_path_at_range(path, target, target).await;
+}
+
+/// Opens a file and selects `start..end` (or goes to `start.line` when at column 0).
+pub async fn open_path_at_range(
+    path: PathBuf,
+    start: nsh_base::EditorPosition,
+    end: nsh_base::EditorPosition,
+) {
     state::record_jump();
+    open_path(path.clone()).await;
+    let Some(id) = with(|workspace| {
+        let active = workspace.active?;
+        let doc = workspace.doc(active)?;
+        (state::saved_path(&doc.document).as_ref() == Some(&path)).then_some(active)
+    }) else { return; };
+    next_frame().await;
+    next_frame().await;
+    let still_same = with(|workspace| {
+        workspace.active == Some(id)
+            && workspace
+                .doc(id)
+                .is_some_and(|doc| state::saved_path(&doc.document).as_ref() == Some(&path))
+    });
+    if !still_same {
+        return;
+    }
     if let Some(api) = state::editor_api(id) {
-        let target = line.saturating_sub(1);
-        api.go_to_line(target);
-        api.reveal_position(nsh_base::EditorPosition::new(target, 0), true);
+        if start != end || start.column != 0 {
+            api.set_selections(vec![nsh_base::EditorSelection::new(start, end)]);
+        } else {
+            api.go_to_line(start.line);
+        }
+        api.reveal_position(start, true);
     }
     state::focus(id);
 }
@@ -165,8 +240,64 @@ pub fn revert_active() {
         });
         if let Some(api) = state::editor_api(id) { api.set_value(text); }
         state::bump_text_rev(id);
+        state::publish();
+        super::lsp::document_changed(id);
         state::notice("Reverted to the saved file.");
     });
+}
+
+/// Updates any open document referencing `from` after an external rename to `to`.
+pub(super) fn relocate_open_path(from: &std::path::Path, to: &std::path::Path) {
+    let changed = with(|workspace| {
+        let mut any = false;
+        for doc in &mut workspace.documents {
+            if state::saved_path(&doc.document).as_deref() == Some(from) {
+                doc.document.relocate(to.to_path_buf());
+                doc.title = state::path_title(to);
+                any = true;
+            }
+        }
+        if any {
+            workspace.changed();
+        }
+        any
+    });
+    if changed {
+        state::publish();
+    }
+}
+
+/// Reloads an already-open, unmodified document from disk after an external
+/// edit (such as Project Replace or Undo Replace).
+pub(super) async fn reload_path_if_clean(path: PathBuf) {
+    let target = with(|workspace| {
+        workspace
+            .documents
+            .iter()
+            .find(|doc| !doc.document.dirty && state::saved_path(&doc.document).as_ref() == Some(&path))
+            .map(|doc| doc.document.id)
+    });
+    let Some(id) = target else { return; };
+    let source = path.clone();
+    let Ok(Ok(loaded)) = blocking(move || load_text(&source, &ReadOptions::default())).await else { return; };
+    let text = loaded.text.clone();
+    let applied = with(|workspace| {
+        let Some(doc) = workspace.doc_mut(id) else { return false; };
+        if doc.document.dirty || state::saved_path(&doc.document).as_ref() != Some(&path) {
+            return false;
+        }
+        doc.document.apply_loaded(&loaded);
+        doc.text = text.clone();
+        workspace.changed();
+        true
+    });
+    if !applied {
+        return;
+    }
+    if let Some(api) = state::editor_api(id) { api.set_value(text); }
+    state::bump_text_rev(id);
+    state::publish();
+    super::lsp::document_changed(id);
 }
 
 /// "Close Other Tabs" (⌥⌘W): closes every document except the active one,
@@ -233,14 +364,19 @@ pub fn close(id: DocumentId) {
     });
 }
 
-/// File > Print… — the active document's text through the system print
-/// panel (CodeRunner prints the source listing, ⌘P).
+/// File > Print… — the active document's text rendered as light syntax-colored
+/// HTML through the system print panel (CodeRunner prints the source listing, ⌘P).
 pub fn print_active() {
     let Some(id) = state::with(|workspace| workspace.active) else { return };
-    let Some(text) = state::text(id) else { return };
     let title = state::with(|workspace| workspace.doc(id).map(|doc| doc.title.clone()))
         .unwrap_or_else(|| "Untitled".to_owned());
-    super::native::print_document(&title, &text);
+    if let Some((html, plain, margins)) = super::theme::print_html(id, &title) {
+        super::native::print_colored_document(&title, &html, &plain, margins);
+    } else if let Some(text) = state::text(id) {
+        let html = format!("<pre style=\"font-family:Menlo,monospace;font-size:8pt\">{}</pre>",
+            text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;"));
+        super::native::print_colored_document(&title, &html, &text, (40.0, 40.0, 40.0, 40.0));
+    }
 }
 
 /// File > New from Clipboard: the clipboard's text as a new document in

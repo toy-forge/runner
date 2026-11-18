@@ -28,10 +28,15 @@ use nsh_base::{
 use nsh_core::element::desktop::{MenuItem, popup_menu};
 use nsh_core::keymap::When;
 use scratch_document::DocumentId;
+use scratch_search::matcher::{MatchMode, Matcher};
+use scratch_search::patterns::{
+    builtin_find_patterns, builtin_replace_patterns, current_search_as_regex, escaped_replacement,
+    replace_insertions_for,
+};
 use scratch_ui_kit::prelude::*;
 use scratch_ui_kit::tokens;
 
-use super::state;
+use super::{preferences, state};
 
 // ---------------------------------------------------------------- State
 
@@ -43,8 +48,58 @@ pub enum Matching {
     Text,
     /// The text as a whole word.
     Word,
+    /// Words starting with the query.
+    WordPrefix,
+    /// Words ending with the query.
+    WordSuffix,
+    /// Query characters separated by arbitrary whitespace.
+    IgnoringWhitespace,
     /// A regular expression (Rust `regex` syntax; `$1` in replacements).
     Regex,
+}
+
+impl Matching {
+    const ALL: [Matching; 6] = [
+        Matching::Text,
+        Matching::Word,
+        Matching::WordPrefix,
+        Matching::WordSuffix,
+        Matching::IgnoringWhitespace,
+        Matching::Regex,
+    ];
+
+    fn to_match_mode(self) -> MatchMode {
+        match self {
+            Matching::Text => MatchMode::Text,
+            Matching::Word => MatchMode::ExactWord,
+            Matching::WordPrefix => MatchMode::WordStartsWith,
+            Matching::WordSuffix => MatchMode::WordEndsWith,
+            Matching::IgnoringWhitespace => MatchMode::IgnoringWhitespace,
+            Matching::Regex => MatchMode::Regex,
+        }
+    }
+
+    fn popup_label(self) -> &'static str {
+        match self {
+            Matching::Text => "Text",
+            Matching::Word => "Word",
+            Matching::WordPrefix => "Word Prefix",
+            Matching::WordSuffix => "Word Suffix",
+            Matching::IgnoringWhitespace => "Ignore Whitespace",
+            Matching::Regex => "Regex",
+        }
+    }
+
+    fn menu_label(self) -> &'static str {
+        match self {
+            Matching::Text => "Text",
+            Matching::Word => "Exact Word",
+            Matching::WordPrefix => "Word Prefix",
+            Matching::WordSuffix => "Word Suffix",
+            Matching::IgnoringWhitespace => "Ignoring Whitespace",
+            Matching::Regex => "Regular Expression",
+        }
+    }
 }
 
 /// The find bar: what it looks for, how, and whether it shows.
@@ -64,6 +119,8 @@ struct Find {
     generation: u64,
     /// Whether the field takes the focus when it is made.
     focus_field: bool,
+    /// Recent search queries (most recent first, max 15).
+    history: Vec<String>,
 }
 
 impl Default for Find {
@@ -79,6 +136,7 @@ impl Default for Find {
             in_selection: false,
             generation: 0,
             focus_field: true,
+            history: Vec::new(),
         }
     }
 }
@@ -96,6 +154,9 @@ fn results() -> Signal<Results> { global::<Results>() }
 /// Whether one of the bar's text fields has the keyboard focus.
 #[derive(Clone, Copy, Default, PartialEq)]
 struct FieldFocus(bool);
+
+/// Returns whether a Find/Replace bar input currently holds keyboard focus.
+pub(super) fn is_field_focused() -> bool { global::<FieldFocus>().get().0 }
 
 /// Go to Line's sheet.
 #[derive(Clone, Default, PartialEq)]
@@ -154,11 +215,21 @@ pub fn search_changed(id: DocumentId, result: &EditorSearchResult) {
     });
 }
 
+fn record_history(query: &str) {
+    if query.is_empty() { return; }
+    find().update(|f| {
+        f.history.retain(|q| q != query);
+        f.history.insert(0, query.to_owned());
+        f.history.truncate(15);
+    });
+}
+
 /// Selects the next match (or the previous one), opening the bar first
 /// when it is closed and a query is known.
 pub fn find_next(forward: bool) {
-    let (shown, empty) = find().with_untracked(|f| (f.open, f.query.is_empty()));
+    let (shown, empty, q) = find().with_untracked(|f| (f.open, f.query.is_empty(), f.query.clone()));
     if empty { open(false); return; }
+    record_history(&q);
     if shown { step(forward); return; }
     // The editors get the search on the next commit; step after it.
     motion::animate_panel();
@@ -183,6 +254,17 @@ pub fn use_selection() {
     };
     find().update(|f| {
         f.query = query;
+        f.matching = Matching::Text;
+        f.focus_field = false;
+        f.generation += 1;
+    });
+}
+
+/// Applies the query sent from the editor's `on_find_with_selection` command (⌘E).
+pub fn use_selection_text(query: &str) {
+    if query.is_empty() { return; }
+    find().update(|f| {
+        f.query = query.to_owned();
         f.matching = Matching::Text;
         f.focus_field = false;
         f.generation += 1;
@@ -265,6 +347,14 @@ pub fn install() {
         super::bindings::on("find.replaceAndFindPrevious", || replace_and_find(false));
         super::bindings::on("find.replaceAllInSelection", replace_all_in_selection);
         super::bindings::on("find.replaceAll", replace_all);
+        super::bindings::on("find.mode.text", || set_matching(Matching::Text));
+        super::bindings::on("find.mode.regularExpression", || set_matching(Matching::Regex));
+        super::bindings::on("find.mode.word", || set_matching(Matching::Word));
+        super::bindings::on("find.mode.wordPrefix", || set_matching(Matching::WordPrefix));
+        super::bindings::on("find.mode.wordSuffix", || set_matching(Matching::WordSuffix));
+        super::bindings::on("find.mode.ignoringWhitespace", || set_matching(Matching::IgnoringWhitespace));
+        super::bindings::on("find.ignoreCase", || find().update(|f| f.ignore_case = !f.ignore_case));
+        super::bindings::on("find.wrapAround", || find().update(|f| f.wrap = !f.wrap));
         super::bindings::on("text.goToLine", go_to_line);
     });
     // Escape closes the bar while one of its fields has the focus; in the
@@ -276,6 +366,10 @@ pub fn install() {
     });
 }
 
+fn set_matching(matching: Matching) {
+    find().update(|f| f.matching = matching);
+}
+
 /// The Find menu's items.
 pub fn menu_items() -> Vec<MenuItem> {
     let mode = |replace: bool| {
@@ -283,9 +377,27 @@ pub fn menu_items() -> Vec<MenuItem> {
             .checked(find().with_untracked(|f| f.replace) == replace)
             .on_select(move || open(replace))
     };
+    let (current_matching, ignore_case, wrap) =
+        find().with_untracked(|f| (f.matching, f.ignore_case, f.wrap));
+    let mode_item = |title: &str, m: Matching| {
+        MenuItem::new(title).checked(current_matching == m).on_select(move || set_matching(m))
+    };
     MENU.iter().map(|&(title, id, action)| match title {
         "-" => MenuItem::separator(),
-        "%" => MenuItem::submenu("Find Mode", [mode(false), mode(true)]),
+        "%" => MenuItem::submenu("Find Mode", [
+            mode_item("Text", Matching::Text),
+            mode_item("Regular Expression", Matching::Regex),
+            mode_item("Word", Matching::Word),
+            mode_item("Word Prefix", Matching::WordPrefix),
+            mode_item("Word Suffix", Matching::WordSuffix),
+            mode_item("Ignoring Whitespace", Matching::IgnoringWhitespace),
+            MenuItem::separator(),
+            MenuItem::new("Ignore Case").checked(ignore_case).on_select(|| find().update(|f| f.ignore_case = !f.ignore_case)),
+            MenuItem::new("Wrap Around").checked(wrap).on_select(|| find().update(|f| f.wrap = !f.wrap)),
+            MenuItem::separator(),
+            mode(false),
+            mode(true),
+        ]),
         _ => {
             let keys = super::bindings::keys_for(id);
             let title = if id == "find.searchSelectedDocument" {
@@ -363,20 +475,37 @@ fn step(forward: bool) {
         }
 }
 
-fn replace_one() {
+fn with_open_search(run: impl FnOnce(std::rc::Rc<EditorApi>) + 'static) {
     let Some(api) = active_api() else { return; };
-    let with = find().with_untracked(|f| f.replacement.clone());
-    api.replace(with);
+    if find().with_untracked(|f| f.open) {
+        run(api);
+    } else {
+        find().update(|f| f.open = true);
+        Owner::detached().run(|| {
+            spawn(async move {
+                next_frame().await;
+                run(api);
+            });
+        });
+    }
+}
+
+fn replace_one() {
+    let (q, with) = find().with_untracked(|f| (f.query.clone(), f.replacement.clone()));
+    record_history(&q);
+    with_open_search(move |api| api.replace(with));
 }
 
 fn replace_all() {
-    let Some(api) = active_api() else { return; };
-    let with = find().with_untracked(|f| f.replacement.clone());
-    let done = api.replace_all(with);
-    state::notice(match done.count {
-        0 => "Nothing was replaced.".to_owned(),
-        1 => "Replaced 1 match.".to_owned(),
-        n => format!("Replaced {n} matches."),
+    let (q, with) = find().with_untracked(|f| (f.query.clone(), f.replacement.clone()));
+    record_history(&q);
+    with_open_search(move |api| {
+        let done = api.replace_all(with);
+        state::notice(match done.count {
+            0 => "Nothing was replaced.".to_owned(),
+            1 => "Replaced 1 match.".to_owned(),
+            n => format!("Replaced {n} matches."),
+        });
     });
 }
 
@@ -417,25 +546,34 @@ fn select_all_results(in_selection: bool) {
 /// "Replace and Find Next/Previous": replaces the current match with the
 /// bar's replacement and steps to the next (or the one before it).
 fn replace_and_find(forward: bool) {
-    let Some(api) = active_api() else { return; };
-    let with = find().with_untracked(|f| f.replacement.clone());
-    api.replace(with);
-    if !forward {
-        spawn(async move {
-            next_frame().await;
-            api.run(EditorCommand::FindPrevious);
-        });
-    }
+    let (q, with) = find().with_untracked(|f| (f.query.clone(), f.replacement.clone()));
+    record_history(&q);
+    with_open_search(move |api| {
+        api.replace(with);
+        if !forward {
+            Owner::detached().run(|| {
+                spawn(async move {
+                    next_frame().await;
+                    api.run(EditorCommand::FindPrevious);
+                });
+            });
+        }
+    });
 }
 
 /// "Replace All in Selection": `replace_all` under the search's
 /// in-selection scope, restored when the commit is done.
 fn replace_all_in_selection() {
-    find().update(|f| f.in_selection = true);
-    spawn(async move {
-        next_frame().await;
-        replace_all();
-        find().update(|f| f.in_selection = false);
+    find().update(|f| {
+        f.open = true;
+        f.in_selection = true;
+    });
+    Owner::detached().run(|| {
+        spawn(async move {
+            next_frame().await;
+            replace_all();
+            find().update(|f| f.in_selection = false);
+        });
     });
 }
 
@@ -471,10 +609,19 @@ fn cancel_go_to() {
 // ---------------------------------------------------------------- Pure logic
 
 fn search_of(f: &Find) -> EditorSearch {
-    let mut search = EditorSearch::new(f.query.clone());
+    let query = match f.matching {
+        Matching::WordPrefix | Matching::WordSuffix | Matching::IgnoringWhitespace if !f.query.is_empty() => {
+            current_search_as_regex(&f.query, f.matching.to_match_mode())
+        }
+        _ => f.query.clone(),
+    };
+    let mut search = EditorSearch::new(query);
     search.case_sensitive = !f.ignore_case;
     search.whole_word = f.matching == Matching::Word;
-    search.regex = f.matching == Matching::Regex;
+    search.regex = matches!(
+        f.matching,
+        Matching::Regex | Matching::WordPrefix | Matching::WordSuffix | Matching::IgnoringWhitespace
+    );
     search.in_selection = f.in_selection;
     search
 }
@@ -590,7 +737,7 @@ fn wide_body() -> impl IntoElement {
         .child(view().flex_row().items_center().gap(px(8.0))
             .child(find_replace_segmented(sm))
             .child(find_input(160.0))
-            .child(matching_segmented(sm))
+            .child(matching_popup())
             .child(ignore_case_checkbox())
             .child(wrap_checkbox())
             .child(prev_next(sm))
@@ -628,16 +775,6 @@ fn find_replace_segmented(size: ControlSize) -> impl IntoElement {
     )
 }
 
-fn matching_segmented(size: ControlSize) -> impl IntoElement {
-    segmented(
-        "Matching",
-        [Segment::new("Text"), Segment::new("Word"), Segment::new("Regex")],
-        move || match find().with(|f| f.matching) { Matching::Text => 0, Matching::Word => 1, Matching::Regex => 2 },
-        move |index| find().update(|f| f.matching = [Matching::Text, Matching::Word, Matching::Regex][index.min(2)]),
-        SegmentedOptions::new().size(size),
-    )
-}
-
 fn matching_popup() -> impl IntoElement {
     view().flex_shrink(0.0).child(dynamic(move || {
         let _ = find().with(|f| f.matching);
@@ -653,31 +790,19 @@ fn matching_popup() -> impl IntoElement {
 }
 
 fn matching_label() -> &'static str {
-    match find().with(|f| f.matching) {
-        Matching::Text => "Text",
-        Matching::Word => "Word",
-        Matching::Regex => "Regex",
-    }
+    find().with(|f| f.matching.popup_label())
 }
 
 fn matching_items() -> Vec<MenuItem> {
     let current = find().with_untracked(|f| f.matching);
-    [Matching::Text, Matching::Word, Matching::Regex]
+    Matching::ALL
         .into_iter()
         .map(|matching| {
-            MenuItem::new(matching_label_of(matching))
+            MenuItem::new(matching.menu_label())
                 .checked(current == matching)
-                .on_select(move || find().update(|f| f.matching = matching))
+                .on_select(move || set_matching(matching))
         })
         .collect()
-}
-
-fn matching_label_of(matching: Matching) -> &'static str {
-    match matching {
-        Matching::Text => "Text",
-        Matching::Word => "Word",
-        Matching::Regex => "Regex",
-    }
 }
 
 fn ignore_case_checkbox() -> impl IntoElement {
@@ -717,15 +842,125 @@ fn options_button() -> impl IntoElement {
 }
 
 fn options_items() -> Vec<MenuItem> {
-    let (ignore, wrap) = find().with_untracked(|f| (f.ignore_case, f.wrap));
-    vec![
-        MenuItem::new("Ignore Case")
-            .checked(ignore)
+    let (matching, ignore, wrap) = find().with_untracked(|f| (f.matching, f.ignore_case, f.wrap));
+    let mut items: Vec<MenuItem> = Matching::ALL
+        .into_iter()
+        .map(|m| MenuItem::new(m.menu_label()).checked(matching == m).on_select(move || set_matching(m)))
+        .collect();
+    items.extend([
+        MenuItem::separator(),
+        MenuItem::new("Case Sensitive")
+            .checked(!ignore)
             .on_select(|| find().update(|f| f.ignore_case = !f.ignore_case)),
         MenuItem::new("Wrap Around")
             .checked(wrap)
             .on_select(|| find().update(|f| f.wrap = !f.wrap)),
-    ]
+    ]);
+    items
+}
+
+fn find_pattern_items() -> Vec<MenuItem> {
+    let (query, matching, history) = find().with_untracked(|f| (f.query.clone(), f.matching, f.history.clone()));
+    let pattern_items: Vec<MenuItem> = builtin_find_patterns()
+        .into_iter()
+        .map(|p| {
+            let text_to_insert = p.text;
+            MenuItem::new(p.title).on_select(move || {
+                find().update(|f| {
+                    f.query.push_str(&text_to_insert);
+                    f.matching = Matching::Regex;
+                    f.focus_field = true;
+                    f.generation += 1;
+                });
+            })
+        })
+        .collect();
+    let recent_items: Vec<MenuItem> = if history.is_empty() {
+        vec![MenuItem::new("No Recent Searches").disabled(true)]
+    } else {
+        history
+            .into_iter()
+            .map(|entry| {
+                let q = entry.clone();
+                MenuItem::new(entry).on_select(move || {
+                    find().update(|f| {
+                        f.query = q.clone();
+                        f.focus_field = true;
+                        f.generation += 1;
+                    });
+                })
+            })
+            .collect()
+    };
+    let user_patterns = preferences::settings().with_untracked(|p| p.text_editing.behavior.text_finder_user_patterns.clone());
+    let mut items = vec![
+        MenuItem::submenu("Insert Pattern", pattern_items),
+        MenuItem::submenu("Recent Searches", recent_items),
+    ];
+    if !user_patterns.is_empty() {
+        let user_items: Vec<MenuItem> = user_patterns
+            .into_iter()
+            .map(|pat| {
+                let text = pat.clone();
+                MenuItem::new(pat).on_select(move || {
+                    find().update(|f| {
+                        f.query = text.clone();
+                        f.matching = Matching::Regex;
+                        f.focus_field = true;
+                        f.generation += 1;
+                    });
+                })
+            })
+            .collect();
+        items.push(MenuItem::submenu("Saved Patterns", user_items));
+    }
+    items.push(MenuItem::separator());
+    items.push(
+        MenuItem::new("Current Search As Regular Expression")
+            .disabled(query.is_empty() || matching == Matching::Regex)
+            .on_select(move || {
+                let converted = current_search_as_regex(&query, matching.to_match_mode());
+                find().update(|f| {
+                    f.query = converted;
+                    f.matching = Matching::Regex;
+                    f.focus_field = true;
+                    f.generation += 1;
+                });
+            }),
+    );
+    items
+}
+
+fn replace_pattern_items() -> Vec<MenuItem> {
+    let (query, replacement, matching, ignore) =
+        find().with_untracked(|f| (f.query.clone(), f.replacement.clone(), f.matching, f.ignore_case));
+    let mut items: Vec<MenuItem> = if matching == Matching::Regex
+        && let Ok(matcher) = Matcher::simple(&query, MatchMode::Regex, ignore)
+    {
+        replace_insertions_for(&matcher)
+            .into_iter()
+            .map(|p| {
+                let snippet = p.text;
+                MenuItem::new(p.title).on_select(move || find().update(|f| f.replacement.push_str(&snippet)))
+            })
+            .collect()
+    } else {
+        builtin_replace_patterns()
+            .into_iter()
+            .map(|p| {
+                let snippet = p.text;
+                MenuItem::new(p.title).on_select(move || find().update(|f| f.replacement.push_str(&snippet)))
+            })
+            .collect()
+    };
+    if !replacement.is_empty() {
+        items.push(MenuItem::separator());
+        items.push(MenuItem::new("Escape Current Replacement").on_select(move || {
+            let escaped = escaped_replacement(&replacement);
+            find().update(|f| f.replacement = escaped);
+        }));
+    }
+    items
 }
 
 fn find_input(min_w: f32) -> impl IntoElement {
@@ -741,8 +976,12 @@ fn find_input(min_w: f32) -> impl IntoElement {
 fn replace_row(size: ControlSize, min_w: f32) -> impl IntoElement {
     view().flex_row().items_center().gap(px(8.0))
         .child(view().flex_1().min_w(px(min_w)).child(replace_field()))
+        .child(icon_button(IconName::ChevronsUpDown, "Insert Replacement Pattern", IconButtonOptions::new().size(size), || {
+            spawn(async { let _ = popup_menu(replace_pattern_items()).await; });
+        }))
         .child(button("Replace", ButtonOptions::new().variant(ButtonVariant::Default).size(size), replace_one))
         .child(button("All", ButtonOptions::new().variant(ButtonVariant::Default).size(size), replace_all))
+        .child(button("All In Selection", ButtonOptions::new().variant(ButtonVariant::Default).size(size), replace_all_in_selection))
 }
 
 /// The active editor's last search result.
@@ -793,7 +1032,9 @@ fn find_field(initial: String, focus: bool, invalid: Memo<bool>) -> impl IntoEle
         .transition_colors()
         .duration(motion::instant)
         .focus_within(|s| s.outline(px(2.0)).outline_color(tokens::ring).outline_offset(px(1.0)))
-        .child(glyph(IconName::Search, IconSize::Xs, Tone::Muted))
+        .child(icon_button(IconName::Search, "Insert Pattern or Recent Search", IconButtonOptions::new().size(ControlSize::Xs), || {
+            spawn(async { let _ = popup_menu(find_pattern_items()).await; });
+        }))
         .child(field)
         .child(type_caption().apply(text(move || {
             let empty = find().with(|f| f.query.is_empty());
@@ -948,6 +1189,12 @@ mod tests {
         assert!(s.regex && s.case_sensitive && !s.whole_word);
         f.matching = Matching::Word;
         assert!(search_of(&f).whole_word);
+        f.matching = Matching::WordPrefix;
+        let wp = search_of(&f);
+        assert!(wp.regex && !wp.whole_word && wp.query == "\\ba\\.b");
+        f.matching = Matching::IgnoringWhitespace;
+        let iw = search_of(&Find { query: "a b".into(), matching: Matching::IgnoringWhitespace, ..Find::default() });
+        assert!(iw.regex && iw.query == "a\\s*b");
     }
 
     #[test]

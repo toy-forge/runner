@@ -210,9 +210,6 @@ impl Engine {
 
         let mut temp = TempRun::create(req.options.temp_root.as_deref())
             .map_err(|e| RunError::TempFile(e.to_string()))?;
-        if req.options.keep_temp {
-            temp.keep();
-        }
         let temp_dir = temp.dir().to_path_buf();
 
         let (src_dir, file, file_name, text_directory) = prepare_source(req, &temp_dir)?;
@@ -313,11 +310,17 @@ impl Engine {
                 }
                 Err(error) => return Err(error),
             };
+            if req.options.keep_temp {
+                temp.keep();
+            }
             self.emit(RunEvent::Compiled(Box::new(info)));
             return Ok(self.summary(RunStatus::Compiled, None));
         }
 
         // Run.
+        if req.options.keep_temp {
+            temp.keep();
+        }
         let info = self.resolve_run(&ctx, compiler_stdout.as_deref())?;
         self.run_program(&ctx, info)
     }

@@ -31,15 +31,19 @@ tokio.workspace = true
 tracing.workspace = true
 nsh-core.workspace = true
 nsh-base.workspace = true
+markdown = "1.0.0"
 
 [dev-dependencies]
 tempfile.workspace = true
+nsh-engine.workspace = true
+nsh-testing.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nsh-platform-macos.workspace = true
+block2 = "0.6"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
-objc2-foundation = "0.3"
+objc2-foundation = { version = "0.3", features = ["NSUserDefaults", "NSData", "NSAttributedString"] }
 objc2-core-foundation = "0.3"
 objc2-core-graphics = "0.3"
 
@@ -64,6 +68,8 @@ all = { level = "warn", priority = -1 }
 [workspace.dependencies]
 nsh-core = { version = "0.5.1" }
 nsh-base = { version = "0.5.1", features = ["editor"] }
+nsh-engine = { version = "0.5.1", default-features = false }
+nsh-testing = { version = "0.5.1", default-features = false }
 nsh-platform-macos = { version = "0.5.1" }
 
 scratch-config = { path = "crates/config" }

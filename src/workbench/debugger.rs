@@ -14,15 +14,18 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use nsh_core::prelude::*;
-use nsh_base::input;
+use nsh_core::element::desktop::{MenuItem, popup_menu, popup_menu_at};
+use nsh_base::{dialog, input};
 use scratch_console_model::Stream as ConsoleStream;
 use scratch_debugger::{
-    AdapterRegistry, Breakpoint, DebugEvent, DebugSession, DebuggerState, Frame, FrameId,
-    SessionCommand, SessionConfig, Variable, VariableId, VariablesQuery,
-    variables::WatchValue,
+    AdapterRegistry, Breakpoint, DebugEvent, DebugSession, DebuggerAdapter, DebuggerState,
+    Frame, FrameId, SessionCommand, SessionConfig, SourceMap, Variable, VariableId,
+    VariablesQuery, variables::WatchValue,
 };
+use scratch_runner::{RunEvent, RunMode, Stream};
 use scratch_ui_kit::prelude::*;
 use scratch_ui_kit::tokens;
+use tokio::sync::mpsc;
 
 use scratch_document::DocumentId;
 
@@ -30,9 +33,28 @@ use super::state::{self, editor_api, with};
 
 thread_local! {
     static SESSION: RefCell<Option<DebugSession>> = const { RefCell::new(None) };
-    /// The program path the live session was started on — `DebugSession`
-    /// does not expose it, and breakpoint syncing needs it.
-    static PROGRAM: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    /// The source file path the live session was started on — `DebugSession`
+    /// keys breakpoints against source files even when debugging compiled binaries.
+    static SOURCE_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    /// Temp directory created for compiled `RunMode::Debug` runs (`keep_temp = true`),
+    /// cleaned up when the debug session stops.
+    static DEBUG_TEMP_DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    /// Temp script file created for interpreted debug runs, removed when the session ends.
+    static DEBUG_TEMP_FILE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone, PartialEq, Default)]
+struct BreakpointSheet {
+    open: bool,
+    doc: Option<DocumentId>,
+    line: u32,
+    enabled: bool,
+    temporary: bool,
+    condition: String,
+}
+
+fn bp_sheet() -> Signal<BreakpointSheet> {
+    global::<BreakpointSheet>()
 }
 
 /// Reactive debugger state for the pane (DESIGN 8.9).
@@ -40,6 +62,8 @@ thread_local! {
 pub struct DebugView {
     /// Document the session is debugging.
     pub doc: Option<DocumentId>,
+    /// Active debugger adapter id (`gdb`, `lldb`, `pdb`, `xdebug`, …).
+    pub adapter_id: String,
     /// Session lifecycle (None = no session).
     pub state: Option<DebuggerState>,
     /// Frames of the last stop.
@@ -92,11 +116,10 @@ fn send(command: SessionCommand) {
 }
 
 /// The document's debugger breakpoints (`Document.breakpoints` is 0-based,
-/// the debugger's 1-based), keyed to `program` — the snapshot file for a
-/// debug session on unsaved text, the document's file when saved paths match.
+/// the debugger's 1-based), keyed to `SOURCE_PATH`.
 fn breakpoints_of(id: DocumentId) -> Vec<Breakpoint> {
-    let program = PROGRAM.with(|p| p.borrow().clone());
-    let Some(program) = program else { return Vec::new() };
+    let source = SOURCE_PATH.with(|p| p.borrow().clone());
+    let Some(source) = source else { return Vec::new() };
     with(|workspace| {
         workspace
             .doc(id)
@@ -106,7 +129,7 @@ fn breakpoints_of(id: DocumentId) -> Vec<Breakpoint> {
                     .as_slice()
                     .iter()
                     .map(|breakpoint| {
-                        let mut installed = Breakpoint::new(program.clone(), breakpoint.line + 1);
+                        let mut installed = Breakpoint::new(source.clone(), breakpoint.line + 1);
                         installed.enabled = breakpoint.enabled;
                         installed.temporary = breakpoint.temporary;
                         if let Some(condition) = &breakpoint.condition {
@@ -120,6 +143,136 @@ fn breakpoints_of(id: DocumentId) -> Vec<Breakpoint> {
     })
 }
 
+/// Opens the Edit Breakpoint dialog for `line` (0-based) on `id`.
+pub(super) fn edit_breakpoint_dialog(id: DocumentId, line: u32) {
+    let bp = with(|workspace| {
+        workspace.doc(id).and_then(|d| {
+            d.document
+                .breakpoints
+                .as_slice()
+                .iter()
+                .find(|b| b.line == line)
+                .cloned()
+        })
+    });
+    let Some(bp) = bp else {
+        state::toggle_breakpoint(id, line);
+        return;
+    };
+    bp_sheet().set(BreakpointSheet {
+        open: true,
+        doc: Some(id),
+        line,
+        enabled: bp.enabled,
+        temporary: bp.temporary,
+        condition: bp.condition.unwrap_or_default(),
+    });
+}
+
+/// Context menu items for breakpoints on an editor line or breakpoint list row.
+pub(super) fn gutter_context_menu(id: DocumentId, line: u32) -> Vec<MenuItem> {
+    let existing = with(|workspace| {
+        workspace.doc(id).and_then(|doc| {
+            doc.document
+                .breakpoints
+                .as_slice()
+                .iter()
+                .find(|b| b.line == line)
+                .cloned()
+        })
+    });
+    match existing {
+        Some(bp) => vec![
+            MenuItem::new("Edit Breakpoint…").on_select(move || edit_breakpoint_dialog(id, line)),
+            MenuItem::new(if bp.enabled { "Disable Breakpoint" } else { "Enable Breakpoint" })
+                .on_select(move || state::set_breakpoint_enabled(id, line, !bp.enabled)),
+            MenuItem::new("Remove Breakpoint").on_select(move || state::toggle_breakpoint(id, line)),
+        ],
+        None => vec![
+            MenuItem::new("Add Breakpoint").on_select(move || state::toggle_breakpoint(id, line)),
+        ],
+    }
+}
+
+/// Returns `(expression, value)` for the identifier under `pos` while `id`
+/// is paused in the debugger, for editor hover inspection.
+pub(super) fn hover_value(id: DocumentId, pos: nsh_base::EditorPosition) -> Option<(String, String)> {
+    if !super::preferences::settings().with_untracked(|p| p.debugger.hover_variables) {
+        return None;
+    }
+    let paused = view_state().with_untracked(|view| {
+        view.doc == Some(id) && matches!(view.state, Some(DebuggerState::Paused { .. }))
+    });
+    if !paused {
+        return None;
+    }
+    let text = state::text(id)?;
+    let line_str = text.split('\n').nth(pos.line as usize)?;
+    let ident = resolve_hover_ident(line_str, pos.column)?;
+    view_state().with_untracked(|view| {
+        if let Some(w) = view.watches.iter().find(|w| w.expression == ident) {
+            if let Some(val) = &w.value {
+                return Some((ident.clone(), val.clone()));
+            }
+        }
+        find_var_value(&view.variables, &ident).map(|val| (ident, val))
+    })
+}
+
+fn resolve_hover_ident(line_str: &str, utf16_col: u32) -> Option<String> {
+    let byte_idx = scratch_search::utf16_to_byte(line_str, utf16_col as usize);
+    if byte_idx >= line_str.len() {
+        return None;
+    }
+    let ch = line_str[byte_idx..].chars().next()?;
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    if !is_ident(ch) {
+        return None;
+    }
+    let mut start = byte_idx;
+    while start > 0 {
+        let prev = line_str[..start].chars().next_back()?;
+        if !is_ident(prev) {
+            break;
+        }
+        start -= prev.len_utf8();
+    }
+    let mut end = byte_idx + ch.len_utf8();
+    while end < line_str.len() {
+        let next = line_str[end..].chars().next()?;
+        if !is_ident(next) {
+            break;
+        }
+        end += next.len_utf8();
+    }
+    let ident = &line_str[start..end];
+    if ident.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(ident.to_owned())
+}
+
+fn find_var_value(vars: &[Variable], ident: &str) -> Option<String> {
+    let trimmed = ident.trim_start_matches('$');
+    for var in vars {
+        let name = var.name.trim_start_matches('$');
+        if var.name == ident || var.display_name == ident || name == trimmed {
+            if let Some(val) = &var.value {
+                return Some(val.clone());
+            }
+            if let Some(desc) = &var.description {
+                return Some(desc.clone());
+            }
+        }
+    }
+    for var in vars {
+        if let Some(found) = find_var_value(&var.children, ident) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 /// Called from `state::toggle_breakpoint`: mirrors the change into a live
 /// session for the same document.
 pub fn sync_breakpoints(id: DocumentId) {
@@ -129,60 +282,269 @@ pub fn sync_breakpoints(id: DocumentId) {
     send(SessionCommand::SetBreakpoints(breakpoints_of(id)));
 }
 
-/// Run ▸ Run in Debugger: start a session for the active document.
-///
-/// Interpreted languages debug a snapshot of the text (CodeRunner's "debug
-/// the script"); a compiled adapter needs the built binary, which the runner
-/// does not hand out yet.
+/// Run ▸ Run and Debug: compiles first when needed via `RunMode::Debug`,
+/// otherwise prepares a snapshot, and starts a `scratch-debugger` session.
 pub fn run_in_debugger() {
     let Some(id) = with(|workspace| workspace.active) else { return };
+    if let Some(handle) = with(|workspace| workspace.doc_mut(id).and_then(|d| d.handle.take())) {
+        handle.cancel();
+    }
     stop();
-    let Some((language, text, title)) = with(|workspace| {
-        workspace
-            .doc(id)
-            .map(|doc| (doc.document.language.clone(), doc.text.clone(), doc.title.clone()))
-    }) else { return };
+    let info = with(|workspace| {
+        let doc = workspace.doc(id)?;
+        let def = workspace.registry.as_ref()?.get(&doc.document.language).cloned()?;
+        Some((
+            doc.document.clone(),
+            doc.title.clone(),
+            doc.text.clone(),
+            def,
+            workspace.runner.clone(),
+        ))
+    });
+    let Some((document, title, text, language_def, runner)) = info else { return };
     let registry = AdapterRegistry::builtin();
-    let Some(adapter) = registry.for_language(&language).cloned() else {
-        console_write(id, ConsoleStream::System, &format!("No debugger is available for {language}."));
+    let preferred = language_def
+        .debugger
+        .as_deref()
+        .and_then(|dbg_id| registry.get(dbg_id))
+        .or_else(|| registry.for_language(&document.language))
+        .cloned();
+    let Some(adapter) = preferred else {
+        console_write(id, ConsoleStream::System, &format!("No debugger is available for {}.", language_def.name));
         return;
     };
 
-    // The debugger's "program" is a snapshot of the text for interpreted
-    // adapters (bashdb, pdb, node, …).
-    let extension = with(|workspace| {
-        workspace
-            .registry
-            .as_ref()
-            .and_then(|r| r.get(&language))
-            .and_then(|def| def.extensions.first().cloned())
-    })
-    .unwrap_or_else(|| "txt".into());
+    let shell = super::execution::current_shell_settings();
+    let runner_settings = super::run_settings::runner_settings(&document);
+    let program_args = runner_settings.argument_list().unwrap_or_default();
+    let input_text = match &runner_settings.input {
+        Some(scratch_runner::ProgramInput::Text(s)) => Some(s.clone()),
+        _ => None,
+    };
+
+    if language_def.has_compile_step() {
+        let mut req = super::execution::request_for(&document, &title, text, &language_def)
+            .with_mode(RunMode::Debug)
+            .with_shell(shell);
+        req.options.keep_temp = true;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let Ok(handle) = runner.start(req, move |msg| {
+            let _ = tx.send(msg);
+        }) else {
+            state::notice("Could not start debug compilation.");
+            return;
+        };
+        let run_id = handle.id();
+        let signals = with(|workspace| {
+            workspace.doc_mut(id).map(|doc| {
+                doc.console.clear();
+                doc.annotations.clear();
+                doc.console.write_line(ConsoleStream::System, &format!("Preparing debug build for {title}…"));
+                doc.handle = Some(handle);
+                (doc.running, doc.status, doc.console_rev)
+            })
+        });
+        if let Some((running, status, console_rev)) = signals {
+            running.set(true);
+            status.set(format!("Compiling {title}…"));
+            console_rev.update(|v| *v = v.wrapping_add(1));
+        }
+        motion::animate_panel();
+        state::display().update(|v| v.console_visible = true);
+        let saved_doc_path = state::saved_path(&document);
+        Owner::detached().run(move || spawn(async move {
+            let mut compiled_info = None;
+            while let Some(msg) = rx.recv().await {
+                if !with(|w| w.doc(id).is_some_and(|d| d.handle.as_ref().is_some_and(|h| h.id() == run_id))) {
+                    return;
+                }
+                match msg.event {
+                    RunEvent::Output { stream, bytes, .. } => {
+                        let stream = match stream {
+                            Stream::Stdout => ConsoleStream::Stdout,
+                            Stream::Stderr => ConsoleStream::Stderr,
+                        };
+                        with(|workspace| {
+                            if let Some(doc) = workspace.doc_mut(id) {
+                                doc.console.append(stream, &bytes);
+                            }
+                        });
+                        if let Some(rev) = with(|w| w.doc(id).map(|d| d.console_rev)) {
+                            rev.update(|v| *v = v.wrapping_add(1));
+                        }
+                    }
+                    RunEvent::Compiled(program) => compiled_info = Some(*program),
+                    RunEvent::Finished(summary) => {
+                        let sigs = with(|workspace| {
+                            workspace.doc_mut(id).map(|doc| {
+                                doc.console.finish_streams();
+                                if doc.handle.as_ref().map(|h| h.id()) == Some(run_id) {
+                                    doc.handle = None;
+                                }
+                                (doc.running, doc.status, doc.console_rev)
+                            })
+                        });
+                        if let Some(info) = compiled_info {
+                            if let Some(tmpdir) = info.env.get("CR_TMPDIR") {
+                                DEBUG_TEMP_DIR.with(|slot| {
+                                    if let Some(old) = slot.borrow_mut().replace(PathBuf::from(tmpdir)) {
+                                        let _ = std::fs::remove_dir_all(old);
+                                    }
+                                });
+                            }
+                            let executable = info
+                                .compiler
+                                .as_deref()
+                                .map(PathBuf::from)
+                                .filter(|p| p.exists())
+                                .or_else(|| {
+                                    (adapter.id != "jdb")
+                                        .then(|| info.argv.first().map(PathBuf::from))
+                                        .flatten()
+                                        .filter(|p| p.exists())
+                                })
+                                .unwrap_or_else(|| info.file.clone());
+                            let mut source_map = SourceMap::new();
+                            if let Some(saved) = &saved_doc_path {
+                                source_map.add(info.file.clone(), saved.clone());
+                            }
+                            let bp_source = info.file.clone();
+                            start_session(
+                                id,
+                                &title,
+                                adapter,
+                                executable,
+                                bp_source,
+                                info.cwd,
+                                program_args,
+                                info.env.into_iter().collect(),
+                                source_map,
+                                input_text,
+                            );
+                        } else {
+                            if let Some(m) = &summary.message {
+                                console_write(id, ConsoleStream::System, m);
+                            }
+                            if let scratch_runner::RunStatus::Error(err) = &summary.status {
+                                console_write(id, ConsoleStream::Stderr, &err.to_string());
+                            }
+                            if let Some((running, status, console_rev)) = sigs {
+                                running.set(false);
+                                status.set(summary.status_text());
+                                console_rev.update(|v| *v = v.wrapping_add(1));
+                            }
+                            super::execution::import_diagnostics(id);
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }));
+        return;
+    }
+
+    // Interpreted languages debug a temp snapshot.
+    let extension = language_def.extensions.first().cloned().unwrap_or_else(|| "txt".into());
     let program = std::env::temp_dir().join(format!("scratchrunner-debug-{id}.{extension}"));
     if std::fs::write(&program, &text).is_err() {
         return;
     }
+    DEBUG_TEMP_FILE.with(|slot| {
+        if let Some(old) = slot.borrow_mut().replace(program.clone()) {
+            let _ = std::fs::remove_file(old);
+        }
+    });
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755));
     }
+    let cwd = resolve_debug_cwd(&document);
+    let mut env = shell.variables;
+    for (k, v) in runner_settings.environment {
+        env.insert(k, v);
+    }
+    start_session(
+        id,
+        &title,
+        adapter,
+        program.clone(),
+        program,
+        cwd,
+        program_args,
+        env,
+        SourceMap::new(),
+        input_text,
+    );
+}
 
-    PROGRAM.with(|p| *p.borrow_mut() = Some(program.clone()));
-    let cwd = with(|workspace| {
-        workspace
-            .doc(id)
-            .and_then(|doc| doc.document.path.as_ref().and_then(|p| p.parent().map(|d| d.to_path_buf())))
-    })
-    .unwrap_or_else(std::env::temp_dir);
-    let config = SessionConfig::new(adapter.clone(), program)
+fn resolve_debug_cwd(document: &scratch_document::Document) -> PathBuf {
+    match &document.run.working_folder {
+        scratch_document::RunFolder::File => state::saved_path(document)
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_else(std::env::temp_dir),
+        scratch_document::RunFolder::Home => std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir),
+        scratch_document::RunFolder::Custom(p) => PathBuf::from(p),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn start_session(
+    id: DocumentId,
+    title: &str,
+    adapter: DebuggerAdapter,
+    program: PathBuf,
+    source_path: PathBuf,
+    cwd: PathBuf,
+    program_args: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
+    source_map: SourceMap,
+    program_input: Option<String>,
+) {
+    SOURCE_PATH.with(|p| *p.borrow_mut() = Some(source_path));
+    let mut config = SessionConfig::new(adapter.clone(), program)
         .cwd(cwd)
+        .env(env)
+        .source_map(source_map)
         .breakpoints(breakpoints_of(id));
+    for arg in program_args {
+        config = config.program_arg(arg);
+    }
+    if let Some(input_text) = program_input {
+        config = config.program_input(input_text);
+    }
     let session = match DebugSession::start(config) {
         Ok(session) => session,
         Err(error) => {
-            console_write(id, ConsoleStream::System, &format!("Could not start the debugger: {error}"));
-            PROGRAM.with(|p| *p.borrow_mut() = None);
+            let hint = adapter.install_hint.clone().unwrap_or_default();
+            let detail = if hint.is_empty() {
+                format!("{error}")
+            } else {
+                format!("{error}\n\n{hint}")
+            };
+            console_write(id, ConsoleStream::System, &format!("Could not start {}: {error}", adapter.name));
+            SOURCE_PATH.with(|p| *p.borrow_mut() = None);
+            if let Some(tmpdir) = DEBUG_TEMP_DIR.with(|p| p.borrow_mut().take()) {
+                let _ = std::fs::remove_dir_all(tmpdir);
+            }
+            if let Some(tmpfile) = DEBUG_TEMP_FILE.with(|p| p.borrow_mut().take()) {
+                let _ = std::fs::remove_file(tmpfile);
+            }
+            if let Some((running, status)) = with(|w| w.doc(id).map(|d| (d.running, d.status))) {
+                running.set(false);
+                status.set("Debugger Unavailable".into());
+            }
+            Owner::detached().run(move || spawn(async move {
+                let _ = nsh_base::alert_dialog()
+                    .title("Could Not Start Debugger")
+                    .description(detail)
+                    .action("ok", "OK")
+                    .show()
+                    .await;
+            }));
             return;
         }
     };
@@ -190,13 +552,14 @@ pub fn run_in_debugger() {
     view_state().update(|view| {
         *view = DebugView {
             doc: Some(id),
+            adapter_id: adapter.id.clone(),
             state: Some(DebuggerState::Starting),
             pane: true,
             ..DebugView::default()
         };
     });
-    // Signals are read out of the workspace and set outside `with`: a set
-    // inside the borrow notifies subscribers that re-borrow it (panic).
+    motion::animate_panel();
+    state::display().update(|v| v.console_visible = true);
     let signals = with(|workspace| {
         workspace.doc_mut(id).map(|doc| {
             doc.console
@@ -298,6 +661,7 @@ fn handle_event(id: DocumentId, event: DebugEvent) -> bool {
             }
         }
         DebugEvent::VariablesChanged { parent, variables, .. } => {
+            let sort_mode = super::preferences::settings().with_untracked(|p| p.debugger.variables_sort_mode);
             view_state().update(|view| {
                 view.edit_error = None;
                 match parent {
@@ -306,16 +670,17 @@ fn handle_event(id: DocumentId, event: DebugEvent) -> bool {
                 None => {
                     view.variables = variables.roots.clone();
                     view.expanded.clear();
-                    rebuild_flat(view);
+                    rebuild_flat(view, sort_mode);
                 }
                 // The subtree of a lazily expanded node replaces its
                 // children; the node stays open.
                 Some(id) => {
                     if let Some(node) = find_variable(&mut view.variables, &id) {
                         node.children = variables.roots.clone();
+                        assign_child_ids(node);
                     }
                     view.expanded.insert(id);
-                    rebuild_flat(view);
+                    rebuild_flat(view, sort_mode);
                 }
                 }
             });
@@ -384,8 +749,10 @@ fn finish(id: DocumentId, message: String) {
         status.set(String::new());
         console_rev.update(|v| *v = v.wrapping_add(1));
     }
+    let hide_auto = super::preferences::settings().with_untracked(|p| p.debugger.hide_view_automatically);
     view_state().update(|view| {
         view.state = None;
+        view.adapter_id.clear();
         view.line = None;
         view.annotation.clear();
         view.stack.clear();
@@ -398,13 +765,27 @@ fn finish(id: DocumentId, message: String) {
         view.edit_error = None;
         // CodeRunner `AutomaticallyHideDebuggerView` (default on): the debug
         // column closes with the session instead of showing stale state.
-        if super::preferences::settings().with(|p| p.debugger.hide_view_automatically) {
+        if hide_auto {
             view.pane = false;
         }
     });
     SESSION.with(|session| *session.borrow_mut() = None);
-    PROGRAM.with(|p| *p.borrow_mut() = None);
+    SOURCE_PATH.with(|p| *p.borrow_mut() = None);
+    if let Some(tmpdir) = DEBUG_TEMP_DIR.with(|p| p.borrow_mut().take()) {
+        let _ = std::fs::remove_dir_all(tmpdir);
+    }
+    if let Some(tmpfile) = DEBUG_TEMP_FILE.with(|p| p.borrow_mut().take()) {
+        let _ = std::fs::remove_file(tmpfile);
+    }
     bump(id);
+}
+
+fn assign_child_ids(node: &mut Variable) {
+    let base = node.id.clone();
+    for (idx, child) in node.children.iter_mut().enumerate() {
+        child.id = base.child(idx);
+        assign_child_ids(child);
+    }
 }
 
 /// Bumps the decoration revision so the editor's `decorations` binding
@@ -423,21 +804,36 @@ fn find_variable<'a>(roots: &'a mut [Variable], id: &VariableId) -> Option<&'a m
     Some(node)
 }
 
-/// Rebuilds the flat display rows from the tree + expansion set.
-fn rebuild_flat(view: &mut DebugView) {
+/// Rebuilds the flat display rows from the tree + expansion set under `sort_mode`.
+fn rebuild_flat(view: &mut DebugView, sort_mode: scratch_config::VariablesSortMode) {
+    use scratch_config::VariablesSortMode;
     view.flat.clear();
-    fn walk(view: &mut DebugView, var: &Variable, depth: usize) {
+    fn walk(view: &mut DebugView, var: &Variable, depth: usize, sort_mode: VariablesSortMode) {
         let open = view.expanded.contains(&var.id);
         view.flat.push((var.clone(), depth));
         if open {
-            for child in &var.children {
-                walk(view, child, depth + 1);
+            let mut children: Vec<&Variable> = var.children.iter().collect();
+            match sort_mode {
+                VariablesSortMode::Name => {
+                    children.sort_by_key(|v| v.name.to_lowercase());
+                }
+                VariablesSortMode::ReverseNatural => children.reverse(),
+                VariablesSortMode::Natural => {}
+            }
+            for child in children {
+                walk(view, child, depth + 1, sort_mode);
             }
         }
     }
     let roots = std::mem::take(&mut view.variables);
-    for var in &roots {
-        walk(view, var, 0);
+    let mut ordered: Vec<&Variable> = roots.iter().collect();
+    match sort_mode {
+        VariablesSortMode::Name => ordered.sort_by_key(|v| v.name.to_lowercase()),
+        VariablesSortMode::ReverseNatural => ordered.reverse(),
+        VariablesSortMode::Natural => {}
+    }
+    for var in ordered {
+        walk(view, var, 0, sort_mode);
     }
     view.variables = roots;
 }
@@ -445,6 +841,7 @@ fn rebuild_flat(view: &mut DebugView) {
 /// Opens/closes a variable row: fetched children collapse locally, unfetched
 /// (`expandable`) subtrees request `ExpandVariable` from the session.
 fn toggle_variable(index: usize) {
+    let sort_mode = super::preferences::settings().with_untracked(|p| p.debugger.variables_sort_mode);
     let (id, expandable, has_children) = {
         let view = view_state().get_untracked();
         let Some((var, _)) = view.flat.get(index) else { return };
@@ -454,7 +851,7 @@ fn toggle_variable(index: usize) {
     if expanded {
         view_state().update(|view| {
             view.expanded.remove(&id);
-            rebuild_flat(view);
+            rebuild_flat(view, sort_mode);
         });
     } else if expandable && !has_children {
         if let Some(frame) = view_state().get_untracked().selected {
@@ -463,7 +860,7 @@ fn toggle_variable(index: usize) {
     } else {
         view_state().update(|view| {
             view.expanded.insert(id);
-            rebuild_flat(view);
+            rebuild_flat(view, sort_mode);
         });
     }
 }
@@ -628,9 +1025,9 @@ pub fn toggle_breakpoint_at_caret() {
 
 // ------------------------------------------------------------------ pane UI
 
-/// The stack/variables column inside the console (DESIGN 8.9). Shown while a
-/// session is live on the active document and `pane` is on.
-pub fn pane() -> impl IntoElement {
+/// Column 1 inside the debug workspace (DESIGN 8.9): stepping toolbar,
+/// paused stop reason annotation, Call Stack, and Breakpoints.
+pub fn stack_pane() -> impl IntoElement {
     let paused = || view_state().with(|view| matches!(view.state, Some(DebuggerState::Paused { .. })));
     let running = || view_state().with(|view| matches!(view.state, Some(DebuggerState::Running)));
     let stopped = || view_state().with(|view| matches!(view.state, Some(DebuggerState::Paused { .. })));
@@ -667,14 +1064,11 @@ pub fn pane() -> impl IntoElement {
             }))
     };
     view()
-        .w(px(200.0))
-        .min_w(px(140.0))
-        .flex_shrink_0()
+        .flex_1()
+        .min_w(px(130.0))
         .h_full()
         .flex_col()
         .bg(tokens::sidebar)
-        .border_r_1()
-        .border_color(tokens::sidebar_border)
         .child(
             view()
                 .h(px(24.0))
@@ -692,7 +1086,12 @@ pub fn pane() -> impl IntoElement {
                 .child(view().flex_1())
                 .child(tool(IconName::Stop, "Stop Debugging", stop as fn(), live)),
         )
-        .child(list_header("Stack"))
+        .child(when(move || view_state().with(|v| !v.annotation.is_empty()), || {
+            view().px_2().py(px(3.0)).bg(tokens::info_muted).border_b_1().border_color(tokens::sidebar_border)
+                .child(text(move || view_state().with(|v| v.annotation.clone()))
+                    .text_xs().text_color(tokens::info).truncate())
+        }))
+        .child(list_header("Call Stack"))
         .child(
             virtual_list(
                 move || view_state().with(|view| view.stack.len()),
@@ -700,7 +1099,7 @@ pub fn pane() -> impl IntoElement {
             )
             .estimated_item_size(px(20.0))
             .flex_1()
-            .min_h(px(40.0))
+            .min_h(px(48.0))
             .empty(
                 text("No frames")
                     .text_xs()
@@ -708,7 +1107,47 @@ pub fn pane() -> impl IntoElement {
                     .p_2(),
             ),
         )
-        .child(list_header("Variables"))
+        .child(list_header("Breakpoints"))
+        .child(
+            scroll().max_h(px(110.0)).flex_shrink(0.0).child(
+                dynamic(move || {
+                    let breakpoints = with(|workspace| workspace.active)
+                        .and_then(|id| {
+                            with(|workspace| {
+                                let doc = workspace.doc(id)?;
+                                let _ = doc.text_rev.get();
+                                Some((id, doc.document.breakpoints.clone()))
+                            })
+                        })
+                        .map(|(id, breakpoints)| {
+                            view()
+                                .flex_col()
+                                .children(
+                                    breakpoints
+                                        .as_slice()
+                                        .iter()
+                                        .map(|breakpoint| breakpoint_row(id, breakpoint.clone())),
+                                )
+                                .into_element()
+                        });
+                    match breakpoints {
+                        Some(element) => element,
+                        None => view().into_element(),
+                    }
+                }),
+            ),
+        )
+}
+
+/// Column 2 inside the debug workspace (DESIGN 8.9): Variables tree + Watches.
+pub fn variables_pane() -> impl IntoElement {
+    view()
+        .flex_1()
+        .min_w(px(150.0))
+        .h_full()
+        .flex_col()
+        .bg(tokens::sidebar)
+        .child(variables_header())
         .child(
             virtual_list(
                 move || view_state().with(|view| view.flat.len()),
@@ -716,7 +1155,7 @@ pub fn pane() -> impl IntoElement {
             )
             .estimated_item_size(px(20.0))
             .flex_1()
-            .min_h(px(40.0))
+            .min_h(px(48.0))
             .empty(
                 text("No variables")
                     .text_xs()
@@ -737,45 +1176,75 @@ pub fn pane() -> impl IntoElement {
         .child(list_header("Watches"))
         .child(watch_input())
         .child(
-            dynamic(move || {
-                view_state().with(|v| {
-                    view()
-                        .flex_col()
-                        .children(v.watches.iter().map(|watch| watch_row(watch.clone())))
-                        .into_element()
-                })
-            }),
-        )
-        .child(list_header("Breakpoints"))
-        .child(
-            dynamic(move || {
-                // The active document's breakpoints (CodeRunner's list),
-                // not the last debugged doc's — text_rev subscribes edits.
-                let breakpoints = with(|workspace| workspace.active)
-                    .and_then(|id| {
-                        with(|workspace| {
-                            let doc = workspace.doc(id)?;
-                            let _ = doc.text_rev.get();
-                            Some((id, doc.document.breakpoints.clone()))
-                        })
-                    })
-                    .map(|(id, breakpoints)| {
+            scroll().max_h(px(90.0)).flex_shrink(0.0).child(
+                dynamic(move || {
+                    view_state().with(|v| {
                         view()
                             .flex_col()
-                            .children(
-                                breakpoints
-                                    .as_slice()
-                                    .iter()
-                                    .map(|breakpoint| breakpoint_row(id, breakpoint.clone())),
-                            )
+                            .children(v.watches.iter().map(|watch| watch_row(watch.clone())))
                             .into_element()
-                    });
-                match breakpoints {
-                    Some(element) => element,
-                    None => view().into_element(),
-                }
-            }),
+                    })
+                }),
+            ),
         )
+}
+
+/// Legacy combined debugger pane wrapper (kept for callers outside `workspace_panels`).
+#[allow(dead_code)]
+pub fn pane() -> impl IntoElement {
+    view().w(px(400.0)).h_full().flex_row()
+        .child(view().w(px(190.0)).h_full().border_r_1().border_color(tokens::sidebar_border).child(stack_pane()))
+        .child(view().w(px(210.0)).h_full().border_r_1().border_color(tokens::sidebar_border).child(variables_pane()))
+}
+
+/// Breakpoint Condition / Options dialog overlay.
+pub(super) fn overlay() -> impl IntoElement {
+    let shown = computed(move || bp_sheet().with(|s| s.open));
+    view().child(dynamic(move || {
+        if !shown.get() {
+            return view().into_element();
+        }
+        let initial = bp_sheet().get_untracked();
+        let Some(doc_id) = initial.doc else { return view().into_element(); };
+        let line = initial.line;
+        let enabled = signal(initial.enabled);
+        let condition = signal(initial.condition.clone());
+        let close = || bp_sheet().update(|s| s.open = false);
+        let save = move || {
+            state::set_breakpoint_enabled(doc_id, line, enabled.get_untracked());
+            state::set_breakpoint_condition(doc_id, line, Some(condition.get_untracked()));
+            close();
+        };
+        dialog()
+            .label("Edit Breakpoint")
+            .on_cancel(close)
+            .flex_1()
+            .child(view().absolute().inset_0().bg(tokens::scrim))
+            .child(view().flex_1().items_center().justify_center()
+                .child(view().w(px(360.0)).p_5().gap_3()
+                    .rounded(px(tokens::radius_xl())).border_1().border_color(tokens::border)
+                    .bg(tokens::background).shadow_lg().shadow_color(tokens::shadow())
+                    .child(type_subhead().semibold().apply(text(format!("Breakpoint at Line {}", line + 1))).text_color(tokens::foreground))
+                    .child(checkbox("Enabled", move || enabled.get(), CheckboxOptions::new(), move |v| enabled.set(v)))
+                    .child(view().gap_1()
+                        .child(type_body().medium().apply(text("Condition:")).text_color(tokens::foreground))
+                        .child(text_field(
+                            "e.g. count > 10",
+                            move || SharedString::from(condition.get()),
+                            move |v: &str| condition.set(v.to_owned()),
+                            TextFieldOptions::new().mono(true).accessibility_label("Breakpoint condition"),
+                            None,
+                        )))
+                    .child(view().flex_row().items_center().gap_2().pt_2()
+                        .child(button("Remove", ButtonOptions::new().variant(ButtonVariant::Destructive).size(ControlSize::Sm), move || {
+                            state::toggle_breakpoint(doc_id, line);
+                            close();
+                        }))
+                        .child(view().flex_1())
+                        .child(button("Cancel", ButtonOptions::new().size(ControlSize::Sm), close))
+                        .child(button("OK", ButtonOptions::new().variant(ButtonVariant::Primary).size(ControlSize::Sm), save)))))
+            .into_element()
+    }))
 }
 
 /// The "add a watch" field: Return installs the expression (the session
@@ -860,6 +1329,9 @@ fn breakpoint_row(id: DocumentId, breakpoint: scratch_document::Breakpoint) -> i
         .gap(px(6.0))
         .h(px(tokens::row_md()))
         .px_2()
+        .on_context_menu(move |e: &ContextMenuEvent| {
+            drop(popup_menu_at(gutter_context_menu(id, line), e.page_position));
+        })
         .child(
             view().child(checkbox(
                 format!("Line {}", line + 1),
@@ -870,7 +1342,7 @@ fn breakpoint_row(id: DocumentId, breakpoint: scratch_document::Breakpoint) -> i
         )
         .child(view().flex_1())
         .child(
-            view().w(px(80.0)).child(text_field(
+            view().w(px(72.0)).child(text_field(
                 "if …",
                 move || SharedString::from(draft.get()),
                 move |value: &str| {
@@ -886,6 +1358,9 @@ fn breakpoint_row(id: DocumentId, breakpoint: scratch_document::Breakpoint) -> i
                 None,
             )),
         )
+        .child(icon_button(IconName::Pencil, "Edit Breakpoint…", IconButtonOptions::new().size(ControlSize::Xs), move || {
+            edit_breakpoint_dialog(id, line);
+        }))
 }
 
 fn list_header(title: &'static str) -> impl IntoElement {
@@ -903,6 +1378,82 @@ fn list_header(title: &'static str) -> impl IntoElement {
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(tokens::muted_foreground),
         )
+}
+
+fn variables_header() -> impl IntoElement {
+    view()
+        .h(px(20.0))
+        .flex_row()
+        .items_center()
+        .pl_2()
+        .pr_1()
+        .bg(tokens::muted)
+        .border_t_1()
+        .border_b_1()
+        .border_color(tokens::sidebar_border)
+        .child(
+            text("Variables")
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(tokens::muted_foreground)
+                .flex_1(),
+        )
+        .child(icon_button(
+            IconName::Ellipsis,
+            "Variables options",
+            IconButtonOptions::new().size(ControlSize::Xs),
+            || {
+                spawn(async {
+                    let _ = popup_menu(variables_menu()).await;
+                });
+            },
+        ))
+}
+
+fn variables_menu() -> Vec<MenuItem> {
+    use scratch_config::VariablesSortMode;
+    let adapter_id = view_state().with_untracked(|v| {
+        if v.adapter_id.is_empty() { "default".to_owned() } else { v.adapter_id.clone() }
+    });
+    let (sort_mode, show_types, hover_vars, hide_auto) = super::preferences::settings().with_untracked(|p| {
+        (
+            p.debugger.variables_sort_mode,
+            p.debugger.variables_display_types.get(&adapter_id).copied().unwrap_or(true),
+            p.debugger.hover_variables,
+            p.debugger.hide_view_automatically,
+        )
+    });
+    let sort_item = |label: &'static str, mode: VariablesSortMode| {
+        MenuItem::new(label)
+            .checked(sort_mode == mode)
+            .on_select(move || {
+                super::preferences::write(move |p| p.debugger.variables_sort_mode = mode);
+                view_state().update(|v| rebuild_flat(v, mode));
+            })
+    };
+    let toggle_types_id = adapter_id.clone();
+    vec![
+        MenuItem::new("Sort Variables By").disabled(true),
+        sort_item("Natural Order", VariablesSortMode::Natural),
+        sort_item("Name", VariablesSortMode::Name),
+        sort_item("Reverse Natural Order", VariablesSortMode::ReverseNatural),
+        MenuItem::separator(),
+        MenuItem::new("Show Variable Types").checked(show_types).on_select(move || {
+            let key = toggle_types_id.clone();
+            super::preferences::write(move |p| {
+                let next = !p.debugger.variables_display_types.get(&key).copied().unwrap_or(true);
+                p.debugger.variables_display_types.insert(key, next);
+            });
+        }),
+        MenuItem::new("Show Values on Hover").checked(hover_vars).on_select(|| {
+            super::preferences::write(|p| p.debugger.hover_variables = !p.debugger.hover_variables);
+        }),
+        MenuItem::new("Automatically Hide Debugger View").checked(hide_auto).on_select(|| {
+            super::preferences::write(|p| {
+                p.debugger.hide_view_automatically = !p.debugger.hide_view_automatically;
+            });
+        }),
+    ]
 }
 
 /// One stack-frame row: `name  file:line`, selecting the frame on press.
@@ -972,8 +1523,16 @@ fn variable_row(index: usize) -> impl IntoElement {
     let row = move || {
         let _ = view_state().get();
         let view = view_state().get_untracked();
+        let adapter_id = if view.adapter_id.is_empty() { "default" } else { view.adapter_id.as_str() };
+        let show_types = super::preferences::settings().with(|p| {
+            p.debugger.variables_display_types.get(adapter_id).copied().unwrap_or(true)
+        });
         view.flat.get(index).map(|(var, depth)| {
-            let label = if var.display_name.is_empty() { var.name.clone() } else { var.display_name.clone() };
+            let base = if var.display_name.is_empty() { var.name.clone() } else { var.display_name.clone() };
+            let label = match (show_types, &var.type_name) {
+                (true, Some(ty)) if !ty.trim().is_empty() => format!("{base}: {ty}"),
+                _ => base,
+            };
             let text = match (&var.value, &var.description) {
                 (Some(value), _) => format!("{label} = {value}"),
                 (None, Some(desc)) => format!("{label} = {desc}"),
@@ -1069,4 +1628,65 @@ pub fn pane_visible() -> bool {
         && view.doc.is_some_and(|doc| {
             with(|workspace| workspace.active) == Some(doc) && with(|workspace| workspace.doc(doc).is_some())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scratch_debugger::VariableKind;
+
+    fn var(id: VariableId, name: &str, value: Option<&str>, children: Vec<Variable>) -> Variable {
+        Variable {
+            id,
+            display_name: name.to_owned(),
+            name: name.to_owned(),
+            type_name: None,
+            kind: VariableKind::Variable,
+            value: value.map(str::to_owned),
+            description: None,
+            raw_value: None,
+            expr: Some(name.to_owned()),
+            children,
+            expandable: false,
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn assign_child_ids_prefixes_nested_variables() {
+        let mut root = var(
+            VariableId::root(1),
+            "pt",
+            None,
+            vec![
+                var(VariableId::root(0), "x", Some("10"), Vec::new()),
+                var(VariableId::root(1), "y", Some("20"), Vec::new()),
+            ],
+        );
+        assign_child_ids(&mut root);
+        assert_eq!(root.children[0].id, VariableId::root(1).child(0));
+        assert_eq!(root.children[1].id, VariableId::root(1).child(1));
+    }
+
+    #[test]
+    fn hover_ident_handles_utf16_and_eol() {
+        let line = "😀 foo = 123";
+        assert_eq!(resolve_hover_ident(line, 3), Some("foo".to_owned()));
+        assert_eq!(resolve_hover_ident(line, 50), None);
+        assert_eq!(resolve_hover_ident(line, 10), None);
+    }
+
+    #[test]
+    fn find_var_value_prefers_top_level_locals_over_struct_children() {
+        let vars = vec![
+            var(
+                VariableId::root(0),
+                "p",
+                None,
+                vec![var(VariableId::root(0).child(0), "x", Some("99"), Vec::new())],
+            ),
+            var(VariableId::root(1), "x", Some("42"), Vec::new()),
+        ];
+        assert_eq!(find_var_value(&vars, "x").as_deref(), Some("42"));
+    }
 }

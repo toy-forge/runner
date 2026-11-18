@@ -307,25 +307,6 @@ impl DebugSession {
             format!("{}-{}", std::process::id(), epoch_nanos()),
         );
 
-        // Attach-style debuggers need their debuggee started first.
-        let server_child = if let Some(argv) = adapter.server_argv(&vars) {
-            if argv.is_empty() {
-                None
-            } else {
-                let mut child = spawn_pipe_command(&argv, &config.cwd, &extra_env, true)?;
-                if let Some(stdout) = child.stdout.take() {
-                    spawn_pump(Box::new(stdout), tx.clone(), false);
-                }
-                if let Some(stderr) = child.stderr.take() {
-                    spawn_pump(Box::new(stderr), tx.clone(), false);
-                }
-                Some(child)
-            }
-        } else {
-            None
-        };
-
-        // The debugger itself.
         let argv = adapter.start_argv(&vars);
         let Some(program) = argv.first() else {
             return Err(DebugError::Spawn("debugger argv is empty".into()));
@@ -334,10 +315,51 @@ impl DebugSession {
             && let Availability::Missing { tool, hint } = adapter.availability() {
                 return Err(DebugError::ToolNotFound { tool, hint });
             }
-        let mut debugger = if adapter.start.pty {
-            spawn_debugger_pty(&argv, &config.cwd, &extra_env, tx.clone())?
+
+        let spawn_server = |tx: &Sender<Msg>| -> Result<Option<std::process::Child>, DebugError> {
+            if let Some(argv) = adapter.server_argv(&vars)
+                && !argv.is_empty()
+            {
+                let mut child = spawn_pipe_command(&argv, &config.cwd, &extra_env, true)?;
+                if let Some(stdout) = child.stdout.take() {
+                    spawn_pump(Box::new(stdout), tx.clone(), false);
+                }
+                if let Some(stderr) = child.stderr.take() {
+                    spawn_pump(Box::new(stderr), tx.clone(), false);
+                }
+                return Ok(Some(child));
+            }
+            Ok(None)
+        };
+
+        // DBGp clients (e.g. Xdebug) listen via `start.program` before the
+        // target `start.server` connects, whereas attach-style adapters start
+        // the debuggee first.
+        let listener_first = adapter.id == "xdebug";
+        let (mut debugger, server_child) = if listener_first {
+            let dbg = if adapter.start.pty {
+                spawn_debugger_pty(&argv, &config.cwd, &extra_env, tx.clone())?
+            } else {
+                spawn_debugger_pipes(&argv, &config.cwd, &extra_env, tx.clone())?
+            };
+            thread::sleep(Duration::from_millis(80));
+            let srv = match spawn_server(&tx) {
+                Ok(srv) => srv,
+                Err(err) => {
+                    let mut dbg = dbg;
+                    dbg.kill_tree();
+                    return Err(err);
+                }
+            };
+            (dbg, srv)
         } else {
-            spawn_debugger_pipes(&argv, &config.cwd, &extra_env, tx.clone())?
+            let srv = spawn_server(&tx)?;
+            let dbg = if adapter.start.pty {
+                spawn_debugger_pty(&argv, &config.cwd, &extra_env, tx.clone())?
+            } else {
+                spawn_debugger_pipes(&argv, &config.cwd, &extra_env, tx.clone())?
+            };
+            (dbg, srv)
         };
         if debugger.pid == 0 {
             debugger.pid = debugger.child.pid().unwrap_or(0);
@@ -972,6 +994,7 @@ struct Job {
 struct AppliedBreakpoint {
     key: BreakpointKey,
     local_id: u64,
+    debugger_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1819,8 +1842,14 @@ impl Actor {
                     bp.verified = !text.contains("error:");
                     bp.debugger_id = debugger_id.clone();
                 }
-                if !self.applied.iter().any(|applied| applied.key == key) {
-                    self.applied.push(AppliedBreakpoint { key, local_id: id });
+                if let Some(existing) = self.applied.iter_mut().find(|applied| applied.key == key) {
+                    existing.debugger_id = debugger_id;
+                } else {
+                    self.applied.push(AppliedBreakpoint {
+                        key,
+                        local_id: id,
+                        debugger_id,
+                    });
                 }
                 self.emit(DebugEvent::BreakpointsChanged(self.breakpoints.clone()));
             }
@@ -2644,6 +2673,13 @@ impl Actor {
                         .unwrap_or_default(),
                 );
                 vars.insert("line".into(), applied.key.line.to_string());
+                vars.insert(
+                    "id".into(),
+                    applied
+                        .debugger_id
+                        .clone()
+                        .unwrap_or_else(|| applied.local_id.to_string()),
+                );
                 self.jobs.push_back(Job {
                     line: render(&template, &vars),
                     kind: JobKind::ClearBreakpoint {
@@ -2971,7 +3007,7 @@ fn is_debugger_line(line: &str, kind: ParserKind) -> bool {
 }
 
 /// Generic stop location parser for adapters that only provide regexes.
-fn parse_generic_stop(
+pub(crate) fn parse_generic_stop(
     text: &str,
     patterns: &CompiledPatterns,
     source_map: &SourceMap,

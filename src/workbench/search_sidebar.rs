@@ -14,14 +14,15 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use nsh_base::input;
+use nsh_base::{alert_dialog, input};
 use nsh_core::element::ImageSrc;
 use nsh_core::element::desktop::{MenuItem, popup_menu_at};
 use nsh_core::prelude::*;
 use scratch_search::matcher::{MatchMode, Matcher};
 use scratch_search::project::{
-    DocumentSnapshot, ProjectMatch, SearchEvent, SearchMode, SearchOptions, SearchOutcome, SearchRequest, SearchSource,
-    spawn_search,
+    DocumentSnapshot, ProjectMatch, RenameStatus, ReplaceJournal, ReplaceOptions, ReplacePlan,
+    SearchEvent, SearchMode, SearchOptions, SearchOutcome, SearchRequest, SearchSource,
+    TargetSelection, search_project, spawn_search,
 };
 use scratch_search::utf16_to_byte;
 use scratch_ui_kit::prelude::*;
@@ -41,6 +42,8 @@ enum Where {
     Root,
     /// A folder picked with Browse….
     Folder(PathBuf),
+    /// Multiple explicit paths ("Custom Search Paths…").
+    Custom(Vec<PathBuf>),
     /// The items selected in the file navigator.
     Selection(Vec<PathBuf>),
     /// Every open document, from its live text.
@@ -56,6 +59,8 @@ impl Where {
         match self {
             Where::Root => format!("Folder “{}”", folder_name(&navigator::root_path())),
             Where::Folder(path) => format!("Folder “{}”", folder_name(path)),
+            Where::Custom(paths) if paths.len() == 1 => format!("Custom “{}”", folder_name(&paths[0])),
+            Where::Custom(paths) => format!("{} Custom Paths", paths.len()),
             Where::Selection(paths) if paths.len() == 1 => "Selected Item".to_owned(),
             Where::Selection(paths) => format!("{} Selected Items", paths.len()),
             Where::OpenDocuments => "All Open Documents".to_owned(),
@@ -119,7 +124,10 @@ struct Search {
     shown_where: Where,
     what: What,
     query: String,
+    replacement: String,
+    replace_mode: bool,
     ignore_case: bool,
+    whole_word: bool,
     regex: bool,
     subdirectories: bool,
     hidden: bool,
@@ -131,6 +139,8 @@ struct Search {
     /// Bumped to rebuild the query field (focus/selection).
     generation: u64,
     focus_field: bool,
+    selected_match: Option<(usize, usize)>,
+    has_undo: bool,
 }
 
 impl Default for Search {
@@ -139,7 +149,10 @@ impl Default for Search {
             shown_where: Where::Root,
             what: What::Both,
             query: String::new(),
+            replacement: String::new(),
+            replace_mode: false,
             ignore_case: true,
+            whole_word: false,
             regex: false,
             subdirectories: true,
             hidden: false,
@@ -150,8 +163,16 @@ impl Default for Search {
             total: 0,
             generation: 0,
             focus_field: false,
+            selected_match: None,
+            has_undo: false,
         }
     }
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct CustomPathsSheet {
+    open: bool,
+    draft: String,
 }
 
 fn search() -> Signal<Search> { global::<Search>() }
@@ -161,6 +182,8 @@ thread_local! {
     static CANCEL: RefCell<Option<scratch_search::CancelToken>> = const { RefCell::new(None) };
     /// The draining task's generation; an old drain exits on a mismatch.
     static DRAIN: Cell<u64> = const { Cell::new(0) };
+    /// Most recent project replace undo journal.
+    static LAST_JOURNAL: RefCell<Option<ReplaceJournal>> = const { RefCell::new(None) };
 }
 
 /// Focuses the query field (the header's search button and View > Search in Files).
@@ -169,6 +192,33 @@ pub(super) fn focus_query() {
         s.generation += 1;
         s.focus_field = true;
     });
+}
+
+/// Switches the sidebar to Project Search scoped to `path` (`Search in Folder…`).
+pub(super) fn search_in_folder(path: PathBuf) {
+    search().update(|s| {
+        s.shown_where = Where::Folder(path);
+        s.focus_field = true;
+        s.generation += 1;
+    });
+    navigator::show_search(true);
+}
+
+/// Switches the sidebar to Project Search scoped to multiple selected `paths`.
+pub(super) fn search_in_selection(paths: Vec<PathBuf>) {
+    if paths.is_empty() {
+        return;
+    }
+    search().update(|s| {
+        s.shown_where = if paths.len() == 1 && paths[0].is_dir() {
+            Where::Folder(paths[0].clone())
+        } else {
+            Where::Selection(paths)
+        };
+        s.focus_field = true;
+        s.generation += 1;
+    });
+    navigator::show_search(true);
 }
 
 /// Runs a search for `query` in `source` at once (context-menu items and tests).
@@ -184,6 +234,7 @@ fn source_of(where_: &Where) -> SearchSource {
     match where_ {
         Where::Root => SearchSource::Folder(navigator::root_path()),
         Where::Folder(path) => SearchSource::Folder(path.clone()),
+        Where::Custom(paths) => SearchSource::CustomPaths(paths.clone()),
         Where::Selection(paths) => SearchSource::SelectedItems(paths.clone()),
         Where::OpenDocuments => SearchSource::OpenDocuments(state::with(|workspace| {
             workspace
@@ -201,14 +252,24 @@ fn source_of(where_: &Where) -> SearchSource {
     }
 }
 
+fn build_matcher(query: &str, regex: bool, whole_word: bool, ignore_case: bool) -> Result<Matcher, String> {
+    let mode = if regex {
+        MatchMode::Regex
+    } else if whole_word {
+        MatchMode::ExactWord
+    } else {
+        MatchMode::Text
+    };
+    Matcher::simple(query, mode, ignore_case).map_err(|e| e.to_string())
+}
+
 fn start(source: SearchSource) {
-    let (query, what, ignore_case, regex, subdirectories, hidden) =
-        search().with_untracked(|s| (s.query.clone(), s.what, s.ignore_case, s.regex, s.subdirectories, s.hidden));
+    let (query, what, ignore_case, whole_word, regex, subdirectories, hidden) =
+        search().with_untracked(|s| (s.query.clone(), s.what, s.ignore_case, s.whole_word, s.regex, s.subdirectories, s.hidden));
     if query.is_empty() {
         return;
     }
-    let mode = if regex { MatchMode::Regex } else { MatchMode::Text };
-    let matcher = match Matcher::simple(&query, mode, ignore_case) {
+    let matcher = match build_matcher(&query, regex, whole_word, ignore_case) {
         Ok(matcher) => matcher,
         Err(error) => {
             search().update(|s| s.status = format!("Invalid pattern: {error}"));
@@ -355,6 +416,7 @@ fn rows_of(groups: &[Group]) -> Vec<Row> {
 }
 
 fn open_match(group: usize, at: usize) {
+    search().update(|s| s.selected_match = Some((group, at)));
     let Some((path, line)) = search().with_untracked(|s| {
         s.groups.0.get(group).and_then(|g| g.matches.get(at).map(|m| (g.path.clone(), m.display_line())))
     }) else {
@@ -362,6 +424,179 @@ fn open_match(group: usize, at: usize) {
     };
     let owner = Owner::current();
     owner.run(|| { spawn(files::open_path_at(path, line)); });
+}
+
+fn step_match(forward: bool) {
+    let target = search().with_untracked(|s| {
+        let mut flat: Vec<(usize, usize)> = Vec::new();
+        for (gi, g) in s.groups.0.iter().enumerate() {
+            for mi in 0..g.matches.len() {
+                flat.push((gi, mi));
+            }
+        }
+        if flat.is_empty() { return None; }
+        let idx = match s.selected_match.and_then(|cur| flat.iter().position(|&p| p == cur)) {
+            None => if forward { 0 } else { flat.len() - 1 },
+            Some(cur) => {
+                if forward { (cur + 1) % flat.len() } else if cur == 0 { flat.len() - 1 } else { cur - 1 }
+            }
+        };
+        Some(flat[idx])
+    });
+    if let Some((g, m)) = target {
+        open_match(g, m);
+    }
+}
+
+fn run_project_replace() {
+    let (query, replacement_text, shown_where, what, ignore_case, whole_word, regex, subdirectories, hidden) =
+        search().with_untracked(|s| (
+            s.query.clone(),
+            s.replacement.clone(),
+            s.shown_where.clone(),
+            s.what,
+            s.ignore_case,
+            s.whole_word,
+            s.regex,
+            s.subdirectories,
+            s.hidden,
+        ));
+    if query.is_empty() { return; }
+    if matches!(shown_where, Where::OpenDocuments) {
+        state::notice("Project Replace operates on saved folders or custom paths.");
+        return;
+    }
+    let matcher = match build_matcher(&query, regex, whole_word, ignore_case) {
+        Ok(m) => m,
+        Err(error) => {
+            search().update(|s| s.status = format!("Invalid pattern: {error}"));
+            return;
+        }
+    };
+    let replacement = match matcher.compile_replacement(&replacement_text) {
+        Ok(r) => r,
+        Err(error) => {
+            search().update(|s| s.status = format!("Invalid replacement: {error}"));
+            return;
+        }
+    };
+    let excluded = preferences::settings().with_untracked(|p| {
+        p.ui.search_excluded_directories
+            .split(',')
+            .map(|n| n.trim().to_owned())
+            .filter(|n| !n.is_empty())
+            .collect::<Vec<_>>()
+    });
+    let mut request = SearchRequest::new(source_of(&shown_where), matcher.clone());
+    request.mode = what.mode();
+    request.options = SearchOptions { subdirectories, hidden, binary: false, excluded_directories: excluded, ..SearchOptions::default() };
+
+    Owner::detached().run(|| {
+        spawn(async move {
+            search().update(|s| { s.running = true; s.status = "Preparing replace…".to_owned(); });
+            let results = blocking(move || search_project(request)).await;
+            let results = match results {
+                Ok(r) => r,
+                Err(error) => {
+                    search().update(|s| { s.running = false; s.status = format!("Replace failed: {error}"); });
+                    return;
+                }
+            };
+            search().update(|s| s.running = false);
+            let Ok(plan) = ReplacePlan::new(&results, matcher, replacement, TargetSelection::All) else {
+                return;
+            };
+            let summary = plan.summary();
+            if summary.matches == 0 {
+                state::notice("Nothing to replace.");
+                return;
+            }
+            let choice = alert_dialog()
+                .title("Replace in Files")
+                .description(format!(
+                    "Replace {} occurrence{} across {} file{}? Unmodified open buffers will reload automatically.",
+                    summary.matches,
+                    if summary.matches == 1 { "" } else { "s" },
+                    summary.files,
+                    if summary.files == 1 { "" } else { "s" },
+                ))
+                .action("cancel", "Cancel")
+                .action("replace", "Replace All")
+                .show()
+                .await;
+            if choice.ok().and_then(|r| r.action).as_deref() != Some("replace") {
+                return;
+            }
+            search().update(|s| { s.running = true; s.status = "Replacing…".to_owned(); });
+            let report = blocking(move || plan.execute(&ReplaceOptions::default())).await;
+            search().update(|s| s.running = false);
+            let Ok(report) = report else { return; };
+            let changed_files = report.changed_files();
+            let replaced = report.replaced_matches();
+            let renamed_docs: Vec<(PathBuf, PathBuf)> = report
+                .renames
+                .iter()
+                .filter(|r| matches!(r.status, RenameStatus::Renamed))
+                .map(|r| (r.from.clone(), r.to.clone()))
+                .collect();
+            for (from, to) in &renamed_docs {
+                files::relocate_open_path(from, to);
+            }
+            let mut modified_paths: Vec<PathBuf> = report.files.iter().map(|f| f.path.clone()).collect();
+            for (_, to) in renamed_docs {
+                if !modified_paths.contains(&to) {
+                    modified_paths.push(to);
+                }
+            }
+            let has_journal = report.journal.as_ref().is_some_and(|j| !j.is_empty());
+            LAST_JOURNAL.with(|j| j.replace(if has_journal { report.journal } else { None }));
+            search().update(|s| { s.has_undo = has_journal; });
+            for p in modified_paths {
+                files::reload_path_if_clean(p).await;
+            }
+            state::notice(format!("Replaced {replaced} match(es) across {changed_files} file(s)."));
+            start(source_of(&shown_where));
+        });
+    });
+}
+
+fn undo_last_replace() {
+    let journal = LAST_JOURNAL.with(|j| j.borrow_mut().take());
+    let Some(journal) = journal else { return; };
+    search().update(|s| s.has_undo = false);
+    let shown_where = search().with_untracked(|s| s.shown_where.clone());
+    Owner::detached().run(|| {
+        spawn(async move {
+            let Ok(report) = blocking(move || journal.undo()).await else { return; };
+            for (from, to) in &report.renamed {
+                files::relocate_open_path(from, to);
+            }
+            let mut paths = report.restored.clone();
+            for (_, to) in &report.renamed {
+                if !paths.contains(to) {
+                    paths.push(to.clone());
+                }
+            }
+            for p in paths {
+                files::reload_path_if_clean(p).await;
+            }
+            if !report.remaining.is_empty() {
+                LAST_JOURNAL.with(|j| j.replace(Some(report.remaining)));
+                search().update(|s| s.has_undo = true);
+            }
+            if report.failures.is_empty() {
+                state::notice(format!("Undid project replace in {} file(s).", report.restored.len()));
+            } else {
+                state::notice(format!(
+                    "Undid project replace in {} file(s); {} failed: {}.",
+                    report.restored.len(),
+                    report.failures.len(),
+                    report.failures[0].reason,
+                ));
+            }
+            start(source_of(&shown_where));
+        });
+    });
 }
 
 // ------------------------------------------------------------------ views
@@ -425,6 +660,14 @@ fn where_menu() -> Vec<MenuItem> {
                 }
             });
         }),
+        MenuItem::new("Custom Search Paths…").on_select(|| {
+            let current = search().with_untracked(|s| match &s.shown_where {
+                Where::Custom(paths) => paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n"),
+                Where::Folder(p) => p.display().to_string(),
+                _ => navigator::root_path().display().to_string(),
+            });
+            global::<CustomPathsSheet>().set(CustomPathsSheet { open: true, draft: current });
+        }),
         MenuItem::separator(),
         MenuItem::new("All Open Documents").on_select(set(Where::OpenDocuments)),
     ];
@@ -438,14 +681,35 @@ fn where_menu() -> Vec<MenuItem> {
 fn find_bar() -> impl IntoElement {
     let generation = computed(|| search().with(|s| s.generation));
     let what_label = computed(|| search().with(|s| SharedString::from(s.what.label())));
+    let replace_mode = computed(|| search().with(|s| s.replace_mode));
+    let has_undo = computed(|| search().with(|s| s.has_undo));
     view().flex_shrink(0.0).flex_col().gap(px(6.0)).px(px(8.0)).py(px(8.0))
         .border_b_1().border_color(tokens::sidebar_border)
-        .child(view().flex_row().items_center().gap(px(6.0))
+        .child(view().flex_row().items_center().gap(px(4.0))
             .child(view().flex_1().min_w(px(0.0)).child(dynamic(move || {
                 let _ = generation.get();
                 let (initial, focus) = search().with_untracked(|s| (s.query.clone(), s.focus_field));
                 query_field(initial, focus).into_element()
-            }))))
+            })))
+            .child(button("Replace", ButtonOptions::new().variant(ButtonVariant::Ghost).size(ControlSize::Sm), || {
+                search().update(|s| s.replace_mode = !s.replace_mode);
+            })))
+        .child(when(move || replace_mode.get(), move || {
+            view().flex_row().items_center().gap(px(4.0))
+                .child(input()
+                    .value(move || search().with(|s| s.replacement.clone()))
+                    .placeholder("Replace with")
+                    .on_change(|text: &str| search().update(|s| s.replacement = text.to_owned()))
+                    .on_submit(|_: &str| run_project_replace())
+                    .placeholder_color(|| color(tokens::muted_foreground()))
+                    .caret_color(|| color(tokens::primary()))
+                    .h(px(24.0)).flex_1().min_w(px(0.0)).px_2().text_sm()
+                    .rounded(px(tokens::radius())).bg(tokens::field).border_1().border_color(tokens::input).text_color(tokens::foreground))
+                .child(button("Replace All…", ButtonOptions::new().variant(ButtonVariant::Default).size(ControlSize::Sm), run_project_replace))
+                .child(when(move || has_undo.get(), || {
+                    button("Undo", ButtonOptions::new().variant(ButtonVariant::Ghost).size(ControlSize::Sm), undo_last_replace)
+                }))
+        }))
         .child(view().flex_row().items_center().gap(px(4.0))
             .child(menu_trigger("What to search", what_menu,
                 text(move || what_label.get()).text_xs().number_of_lines(1).text_color(tokens::sidebar_foreground)))
@@ -491,10 +755,11 @@ fn what_menu() -> Vec<MenuItem> {
 }
 
 fn options_menu() -> Vec<MenuItem> {
-    let (ignore_case, regex, subdirectories, hidden) =
-        search().with_untracked(|s| (s.ignore_case, s.regex, s.subdirectories, s.hidden));
+    let (ignore_case, whole_word, regex, subdirectories, hidden) =
+        search().with_untracked(|s| (s.ignore_case, s.whole_word, s.regex, s.subdirectories, s.hidden));
     vec![
         MenuItem::new("Ignore Case").checked(ignore_case).on_select(|| search().update(|s| s.ignore_case = !s.ignore_case)),
+        MenuItem::new("Whole Words").checked(whole_word).disabled(regex).on_select(|| search().update(|s| s.whole_word = !s.whole_word)),
         MenuItem::new("Regular Expression").checked(regex).on_select(|| search().update(|s| s.regex = !s.regex)),
         MenuItem::separator(),
         MenuItem::new("Search Subdirectories").checked(subdirectories).on_select(|| search().update(|s| s.subdirectories = !s.subdirectories)),
@@ -653,7 +918,7 @@ fn progress() -> impl IntoElement {
 }
 
 fn footer() -> impl IntoElement {
-    view().h(px(24.0)).flex_shrink(0.0).flex_row().items_center().gap(px(8.0)).px(px(8.0))
+    view().h(px(24.0)).flex_shrink(0.0).flex_row().items_center().gap(px(4.0)).px(px(8.0))
         .border_t_1().border_color(tokens::sidebar_border)
         .child(text(move || {
             search().with(|s| {
@@ -668,7 +933,68 @@ fn footer() -> impl IntoElement {
                 }
             })
         }).text_xs().text_color(tokens::muted_foreground).flex_1().number_of_lines(1))
+        .child(icon_button(IconName::ChevronUp, "Previous Search Match", IconButtonOptions::new().size(ControlSize::Xs), || step_match(false)))
+        .child(icon_button(IconName::ChevronDown, "Next Search Match", IconButtonOptions::new().size(ControlSize::Xs), || step_match(true)))
         .child(button("Done", ButtonOptions::new().variant(ButtonVariant::Default).size(ControlSize::Xs), || {
             navigator::show_search(false)
         }))
+}
+
+/// Modal sheet for editing Custom Search Paths, mounted once at root.
+pub fn overlay() -> impl IntoElement {
+    when(move || global::<CustomPathsSheet>().with(|s| s.open), || {
+        let sheet = global::<CustomPathsSheet>();
+        let close = || global::<CustomPathsSheet>().update(|s| s.open = false);
+        let apply = move || {
+            let paths: Vec<PathBuf> = sheet.with_untracked(|s| s.draft.clone())
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .map(PathBuf::from)
+                .collect();
+            global::<CustomPathsSheet>().update(|s| s.open = false);
+            if !paths.is_empty() {
+                search().update(|s| s.shown_where = Where::Custom(paths));
+            }
+        };
+        nsh_core::prelude::overlay()
+            .inset_0()
+            .child(view().absolute().inset_0().bg(tokens::scrim).on_press(close))
+            .child(view().flex_1().items_center().pt(px(48.0)).child(
+                view()
+                    .w(px(440.0)).p(px(18.0)).gap(px(10.0))
+                    .rounded(px(tokens::radius_xl())).bg(tokens::background)
+                    .border_1().border_color(tokens::border)
+                    .shadow_lg().shadow_color(tokens::shadow())
+                    .child(type_subhead().semibold().apply(text("Custom Search Paths")).text_color(tokens::foreground))
+                    .child(type_caption().apply(text("Enter one absolute folder or file path per line.")).text_color(tokens::muted_foreground))
+                    .child(input()
+                        .value(move || sheet.with(|s| s.draft.clone()))
+                        .multiline(true)
+                        .on_change(move |v: &str| sheet.update(|s| s.draft = v.to_owned()))
+                        .placeholder("/path/to/folder")
+                        .placeholder_color(|| color(tokens::muted_foreground()))
+                        .caret_color(|| color(tokens::primary()))
+                        .h(px(140.0)).p_2().text_xs()
+                        .font_family(scratch_ui_kit::typography::CODE_FONT_STACK)
+                        .bg(tokens::field).text_color(tokens::foreground)
+                        .border_1().border_color(tokens::input).rounded(px(tokens::radius())))
+                    .child(view().flex_row().items_center().gap(px(8.0))
+                        .child(button("Add Folder…", ButtonOptions::new().variant(ButtonVariant::Default).size(ControlSize::Sm), move || {
+                            spawn(async move {
+                                if let Ok(Some(picked)) = pick_paths(nsh_core::file_dialog::OpenDialog::folders()).await {
+                                    sheet.update(|s| {
+                                        for p in picked {
+                                            if !s.draft.is_empty() && !s.draft.ends_with('\n') { s.draft.push('\n'); }
+                                            s.draft.push_str(&p.display().to_string());
+                                        }
+                                    });
+                                }
+                            });
+                        }))
+                        .child(view().flex_1())
+                        .child(button("Cancel", ButtonOptions::new().variant(ButtonVariant::Default).size(ControlSize::Sm), close))
+                        .child(button("Save", ButtonOptions::new().variant(ButtonVariant::Primary).size(ControlSize::Sm), apply))),
+            ))
+    })
 }

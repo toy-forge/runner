@@ -8,7 +8,10 @@
 //! Navigation items merge the document's annotations with the LSP
 //! diagnostics the workbench keeps per document.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use nsh_base::editor::EditorEdit;
 use nsh_base::{EditorPosition, EditorRange, EditorSelection, dialog};
@@ -61,11 +64,61 @@ fn console_key(language: &str) -> String {
 
 // ---------------------------------------------------------------- Run
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JobTrigger {
+    Manual,
+    OnRun,
+    OnEdit,
+}
+
+thread_local! {
+    static EDIT_DIAG_GEN: RefCell<HashMap<DocumentId, u64>> = RefCell::new(HashMap::new());
+}
+
 /// "Run Diagnostics" (⌘B): runs the active language's job diagnostics now.
 pub fn run_diagnostics() {
     let Some(id) = state::with(|workspace| workspace.active) else {
         return;
     };
+    run_jobs(id, JobTrigger::Manual);
+}
+
+/// Runs job diagnostics configured with "On Run" before/alongside execution.
+pub(super) fn on_run(id: DocumentId) {
+    run_jobs(id, JobTrigger::OnRun);
+}
+
+/// Schedules enabled "On Edit" job diagnostics after the configured delay
+/// when `DiagnosticsWhileTyping` is enabled.
+pub(super) fn on_edit(id: DocumentId) {
+    let (while_typing, delay_secs) = super::preferences::settings()
+        .with_untracked(|p| (p.text_editing.diagnostics.while_typing, p.text_editing.diagnostics.delay));
+    if !while_typing {
+        return;
+    }
+    let generation = EDIT_DIAG_GEN.with_borrow_mut(|map| {
+        let entry = map.entry(id).or_insert(0);
+        *entry += 1;
+        *entry
+    });
+    let delay = Duration::from_secs_f64(delay_secs.clamp(0.2, 10.0));
+    Owner::detached().run(|| {
+        spawn(async move {
+            tokio::time::sleep(delay).await;
+            let current = EDIT_DIAG_GEN.with_borrow(|map| map.get(&id).copied().unwrap_or(0));
+            if current == generation {
+                run_jobs(id, JobTrigger::OnEdit);
+            }
+        });
+    });
+}
+
+fn is_buffer_saved(path: Option<&std::path::Path>, dirty: bool) -> bool {
+    path.is_some() && !dirty
+}
+
+fn run_jobs(id: DocumentId, trigger: JobTrigger) {
+    let manual = trigger == JobTrigger::Manual;
     let found = state::with(|workspace| {
         let doc = workspace.doc(id)?;
         let registry = workspace.registry.as_ref()?;
@@ -76,7 +129,15 @@ pub fn run_diagnostics() {
         let jobs: Vec<_> = defs
             .iter()
             .zip(entries.iter())
-            .filter(|(_, entry)| entry.enabled && entry.is_job())
+            .filter(|(_, entry)| {
+                entry.enabled
+                    && entry.is_job()
+                    && match trigger {
+                        JobTrigger::Manual => true,
+                        JobTrigger::OnRun => entry.update.on_run,
+                        JobTrigger::OnEdit => entry.update.on_edit,
+                    }
+            })
             .map(|(def, _)| def.clone())
             .collect();
         Some((language, jobs, state::saved_path(&doc.document)))
@@ -85,19 +146,26 @@ pub fn run_diagnostics() {
         return;
     };
     if jobs.is_empty() {
-        state::notice("This language has no diagnostics to run.");
+        if manual {
+            state::notice("This language has no diagnostics to run.");
+        }
         return;
     }
-    super::execution::status(id, "Running diagnostics…");
+    if manual {
+        super::execution::status(id, "Running diagnostics…");
+    }
     Owner::detached().run(|| {
         spawn(async move {
             for def in &jobs {
                 let Some(text) = state::text(id) else {
                     continue;
                 };
+                let dirty = state::with(|workspace| {
+                    workspace.doc(id).is_some_and(|doc| doc.document.dirty)
+                });
                 let mut job = DiagnosticJob::new(Arc::new(language.clone()), def.clone(), text);
                 job.file = path.clone();
-                job.buffer_is_saved = path.is_some();
+                job.buffer_is_saved = is_buffer_saved(path.as_deref(), dirty);
                 let name = def.name.clone();
                 let file = job.file.clone();
                 let buffer = job.text.clone();
@@ -105,11 +173,11 @@ pub fn run_diagnostics() {
                 let output = match blocking(move || run_job(&job, &cancel)).await {
                     Ok(Ok(output)) => output,
                     Ok(Err(error)) => {
-                        state::notice(format!("{name}: {error}"));
+                        if manual { state::notice(format!("{name}: {error}")); }
                         continue;
                     }
                     Err(error) => {
-                        state::notice(format!("{name}: {error}"));
+                        if manual { state::notice(format!("{name}: {error}")); }
                         continue;
                     }
                 };
@@ -122,7 +190,9 @@ pub fn run_diagnostics() {
                 });
                 state::bump_diag_rev(id);
             }
-            super::execution::status(id, "Diagnostics finished");
+            if manual {
+                super::execution::status(id, "Diagnostics finished");
+            }
         });
     });
 }
@@ -161,7 +231,7 @@ fn annotation_ranges(id: DocumentId) -> Vec<(EditorPosition, EditorPosition, boo
 }
 
 /// Moves the caret to the next/previous annotation (errors only when asked).
-fn jump(forward: bool, errors_only: bool) {
+pub(super) fn jump(forward: bool, errors_only: bool) {
     let Some(id) = state::with(|workspace| workspace.active) else {
         return;
     };
@@ -364,9 +434,12 @@ fn run_single(def: scratch_language::DiagnosticDef) {
     Owner::detached().run(|| {
         spawn(async move {
             let Some(text) = state::text(id) else { return };
+            let dirty = state::with(|workspace| {
+                workspace.doc(id).is_some_and(|doc| doc.document.dirty)
+            });
             let mut job = DiagnosticJob::new(Arc::new(language), def, text);
             job.file = path.clone();
-            job.buffer_is_saved = path.is_some();
+            job.buffer_is_saved = is_buffer_saved(path.as_deref(), dirty);
             let file = job.file.clone();
             let buffer = job.text.clone();
             let cancel = CancelToken::new();
@@ -552,7 +625,7 @@ pub fn install() {
     effect(|| {
         let _ = global::<super::EditorFocus>().get();
         let _ = global::<super::bindings::BindingsRevision>().get();
-        super::bindings::on("run.runDiagnostics", run_diagnostics);
+        super::bindings::on("run.runDiagnostics", super::execution::compile_or_diagnostics);
         super::bindings::on("diag.applyNextFix", || apply_fixes(true));
         super::bindings::on("diag.applyAllFixes", || apply_fixes(false));
         super::bindings::on("diag.nextDiagnostic", || jump(true, false));
@@ -579,6 +652,7 @@ pub fn menu_items() -> Vec<MenuItem> {
         // Run Diagnostics lives in the Run menu (⌘B) — repeating it here
         // would bind the same keystroke twice.
         item("Clear Diagnostics", "diag.clear", clear_diagnostics),
+        item("LSP Server Status…", "lsp.serverStatus", super::lsp::open_status_sheet),
         MenuItem::separator(),
         item("Apply Next Fix", "diag.applyNextFix", || apply_fixes(true)),
         item("Apply All Fixes", "diag.applyAllFixes", || apply_fixes(false)),
@@ -692,4 +766,17 @@ fn console_text_submenu(language: &str) -> Vec<MenuItem> {
         MenuItem::new(label).on_select(move || set_console_text_mode(language.clone(), mode)).checked(current == mode)
     })
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn buffer_is_saved_requires_path_and_clean_state() {
+        assert!(!is_buffer_saved(None, false));
+        assert!(!is_buffer_saved(Some(Path::new("/tmp/a.rs")), true));
+        assert!(is_buffer_saved(Some(Path::new("/tmp/a.rs")), false));
+    }
 }

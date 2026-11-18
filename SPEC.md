@@ -1217,12 +1217,15 @@ runner/
 │   └── workbench/          mod, chrome, state, files, execution,
 │                           run_settings, console, debugger, diagnostics,
 │                           lsp, find, navigator, search_sidebar,
-│                           quick_open, preferences, docs, edit,
+│                           quick_open, preferences, docs, edit, help,
 │                           compound, bindings, persistence, theme, ui,
 │                           native
 │
+├── tests/                  Rust headless UI integration tests (`workbench.rs`)
+├── e2e/                    macOS E2E & visual audit suite (`visual.test.tsx`)
+│
 └── crates/
-    ├── commands/           command table, key bindings, vim/compound commands
+    ├── commands/           command table, key bindings, menus, compound (vim) commands
     ├── config/             settings.toml model, paths, schema, migrations
     ├── console-model/      ANSI/VT parsing, bounded line store, filters, links
     ├── debugger/           TOML adapters, sessions, breakpoints, variables, REPL
@@ -1233,40 +1236,32 @@ runner/
     ├── navigator/          file navigator sidebar
     ├── runner/             PTY run engine, compile stages, CR_* env, diagnostics glue
     ├── search/             find/replace engine, project search, QuickNav
-    ├── theme/              .tmTheme parsing, incremental highlighting
+    ├── theme/              .tmTheme parsing, incremental highlighting, 15 built-ins
     └── ui-kit/             design tokens, typography, icons, motion, controls
 ```
 
-Packaging is `nsh package` (see docs/development.md); there is no `packaging/`
+Packaging is `nsh package --target macos` (see docs/development.md); there is no `packaging/`
 directory.
 
 ---
 
 # 16. Implementation Status
 
-Phases 0–4 are complete. What exists today, beyond the original MVP:
+All core workbench, debugger, LSP, search, theme, key-binding, and macOS UX parity phases (Waves 1–8) are implemented:
 
-- 34 language definitions, compile stages, diagnostics engine, per-file Run
-  Settings, CR_* environment contract
-- LSP: 23-server catalogue, lazy per-workspace servers, virtual workspaces,
-  completion, hover, diagnostics; an LSP status sheet
-- Debugger: lldb / pdb / node / jdb / bashdb / perl / phpdbg via TOML adapters,
-  breakpoints, stack and variables pane, console REPL
-- Navigator sidebar, project search, Quick Open, Find bar, symbol menu,
-  documentation panel
-- Preferences window, themes, rebindable key sets (default, global, vim),
-  session/window-state persistence, crash recovery
-- Native packaging via `nsh package`
+- **Workbench & Multi-Window Shell:** 3-column workbench (`Navigator | Editor/Console | Docs`), custom 32pt title band with focus dimming, persistent window bounds, CLI `--new-window`/`--open`/`--handoff`, `Move Tab to New Window`, `About ScratchRunner` & `ScratchRunner Help` secondary native windows.
+- **Languages, Run & Compile Engine:** 34 language definitions, custom compile shell scripts & declarative steps, `Run`, `Run & Debug`, `Run Without Debugging`, `Run Selection`, `Compile Only`, per-document Run Settings (`?` Help + `Make Default`), `CR_*` environment contract, live CPU/RSS polling, and large-output (>128 KiB) alert handling.
+- **Interactive Debugger:** `lldb`, `gdb`, `xdebug`, `pdb`, `node`, `jdb`, `bashdb`, `perl`, and `phpdbg` adapters; compiled-language debugging via `SourceMap`; split `Stack | Variables` debugger panes; conditional/action/log breakpoints; debugger REPL; and paused hover expression inspection.
+- **LSP & Diagnostics:** 23-server catalogue, lazy per-workspace servers, virtual workspaces, completions, hover links & Go to Definition (`F12`), Signature Help (`⇧⌘Space`), Code Actions quick-fixes, Rename Symbol (`F2`), Format Document (`⌃⇧I`), live LSP Server Status sheet, debounced on-edit diagnostics, and diagnostic line highlighting.
+- **Embedded WKWebView Console & Docs:** Live Web/Markdown preview (`WebKitDeveloperExtras`, Back/Forward/Reload, editable resource bar, JS Console/REPL drawer), `Jump to Bottom` pill, Up/Down console input history, Documentation pane with source chips, reader CSS stylizing, bookmarking, offline retry fallback, and extracted Table of Contents footer.
+- **Search, Navigation & Editing:** In-file Find & Replace with regex pattern menu, recent searches, saved patterns, `Replace All In Selection`; Project Search sidebar with `Whole Word`, custom path sets, disk `ReplacePlan` confirmation & `ReplaceJournal` Undo; Navigator `Go to Folder…` & template creation; Emacs kill-ring (`⌃K`/`⌃Y`), custom surround sheet, and Color Scopes inspector.
+- **Themes, Key Bindings & Printing:** 15 built-in themes (including `Xcode Dark`, `GitHub Light`, `GitHub Dark`, `One Dark`), live `.tmTheme`/`.crTheme` editor, syntax-colored HTML source printing via AppKit `NSPrintOperation`, interactive AppKit `KeyRecorder`, compound/Vim command `Machine`, and Shell Auto-PATH preview & refresh.
+- **Verification & Packaging:** `cargo test --workspace` + `tests/workbench.rs` (`Headless`), `e2e/visual.test.tsx` (Light/Dark macOS visual audit), `nsh check`, and `nsh package --target macos`.
 
 ## Not yet implemented
 
-- Signature help, go to definition, code actions, rename — LSP client supports
-  the requests; no editor UI calls them
-- Multiple windows (`File > New Window` opens a tab)
-- Bun / tsx runtimes, Python virtualenv detection, `cargo run`
-- Per-language interpreter/runtime selection beyond language definitions
-- Installable-bundle distribution and performance budgets (unverified — see
-  §18)
+- Bun / tsx runtimes, Python virtualenv detection, and native `cargo run` workspace integration
+- Notarized release distribution (ad-hoc `.app` bundle via `nsh package --target macos` works) and release performance benchmark suite (§12, §18)
 
 ---
 
@@ -1379,21 +1374,13 @@ These features remain intentionally deferred:
 
 ### P1 — Quality of Life
 
-- Run selected code
-- Execution history
-- Favorite scratchpads
-- Command palette (Quick Open covers files/symbols, not commands)
+- Execution history & saved favorite scratchpads
 - Custom execution profiles
-- Code formatting (LSP `textDocument/formatting` is engine-ready)
-- Multiple real windows
 
 ### P2 — Advanced Editing
 
 - Tree-sitter-based highlighting
-- LSP signature help, go to definition, code actions, rename (client ready,
-  UI missing)
-- Workspace symbols
-- Semantic tokens
+- Workspace symbols & semantic tokens
 - Runtime environment selector / virtualenv detection
 - Bun / tsx runtimes, `cargo run`
 

@@ -69,6 +69,9 @@ pub struct DragState {
 /// What the app does with an `Open` of a file.
 pub type OpenHandler = Rc<dyn Fn(PathBuf)>;
 
+/// What the app does with "Search N Items...".
+pub type SelectionHandler = Rc<dyn Fn(Vec<PathBuf>)>;
+
 /// The navigator's state.
 #[derive(Clone, Copy)]
 pub struct Store {
@@ -115,6 +118,11 @@ pub struct Store {
     /// Owner of the component that made the store; every task runs under it.
     owner: Owner,
     open: Stored<Option<OpenHandler>>,
+    open_new_window: Stored<Option<OpenHandler>>,
+    search_folder: Stored<Option<OpenHandler>>,
+    search_selection: Stored<Option<SelectionHandler>>,
+    go_to_folder: Stored<Option<Rc<dyn Fn()>>>,
+    new_template: Stored<Option<OpenHandler>>,
     watcher: Stored<Option<DirWatcher>>,
     watch_task: Stored<Option<Spawned<()>>>,
     spring: Stored<Option<Spawned<()>>>,
@@ -150,6 +158,11 @@ impl Store {
             clipboard: stored(Vec::new()),
             owner: Owner::current(),
             open: stored(None),
+            open_new_window: stored(None),
+            search_folder: stored(None),
+            search_selection: stored(None),
+            go_to_folder: stored(None),
+            new_template: stored(None),
             watcher: stored(None),
             watch_task: stored(None),
             spring: stored(None),
@@ -171,6 +184,87 @@ impl Store {
     /// Sets what opening a file does.
     pub fn on_open(&self, f: impl Fn(PathBuf) + 'static) {
         self.open.replace(Some(Rc::new(f)));
+    }
+
+    /// Sets what "Open in New Window" does.
+    pub fn on_open_new_window(&self, f: impl Fn(PathBuf) + 'static) {
+        self.open_new_window.replace(Some(Rc::new(f)));
+    }
+
+    /// Sets what "Search in Folder…" does.
+    pub fn on_search_folder(&self, f: impl Fn(PathBuf) + 'static) {
+        self.search_folder.replace(Some(Rc::new(f)));
+    }
+
+    /// Sets what "Search N Items..." does for a multi-selection.
+    pub fn on_search_selection(&self, f: impl Fn(Vec<PathBuf>) + 'static) {
+        self.search_selection.replace(Some(Rc::new(f)));
+    }
+
+    /// Sets a custom handler for "Go to Folder…" (returns `true` if handled).
+    pub fn on_go_to_folder(&self, f: impl Fn() + 'static) {
+        self.go_to_folder.replace(Some(Rc::new(f)));
+    }
+
+    /// Sets what creating a file from the active language template does.
+    pub fn on_new_from_template(&self, f: impl Fn(PathBuf) + 'static) {
+        self.new_template.replace(Some(Rc::new(f)));
+    }
+
+    pub fn trigger_open_new_window(&self, path: PathBuf) {
+        let cb = self.open_new_window.with(|o| o.clone());
+        if let Some(f) = cb {
+            f(path);
+        } else {
+            self.status.set("Open in New Window is not available".into());
+        }
+    }
+
+    pub fn trigger_search_folder(&self, path: PathBuf) {
+        let cb = self.search_folder.with(|o| o.clone());
+        if let Some(f) = cb {
+            f(path);
+        } else {
+            self.status
+                .set("Search...: switches the sidebar to the search tab".into());
+        }
+    }
+
+    pub fn trigger_search_selection(&self, paths: Vec<PathBuf>) {
+        let cb = self.search_selection.with(|o| o.clone());
+        if let Some(f) = cb {
+            f(paths);
+        } else if let Some(first) = paths.into_iter().next() {
+            let dir = if first.is_dir() {
+                first
+            } else {
+                first
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| self.root_path())
+            };
+            self.trigger_search_folder(dir);
+        }
+    }
+
+    pub fn trigger_go_to_folder(&self) -> bool {
+        let cb = self.go_to_folder.with(|o| o.clone());
+        if let Some(f) = cb {
+            f();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn trigger_new_from_template(&self, dir: PathBuf) -> bool {
+        let cb = self.new_template.with(|o| o.clone());
+        if let Some(f) = cb {
+            f(dir);
+            true
+        } else {
+            false
+        }
     }
 
     // ---- model plumbing -------------------------------------------------

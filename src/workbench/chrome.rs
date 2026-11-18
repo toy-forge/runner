@@ -9,9 +9,7 @@
 //!   close control fades in on hover.
 //! - Status bar: text updates in place, no animation.
 
-use std::time::Duration;
-
-use nsh_base::{EditorPosition, EditorSelection, tab, tabs};
+use nsh_base::{EditorPosition, EditorSelection, PopoverEvent, popover, tab, tabs};
 use nsh_core::desktop::WindowAttributes;
 use nsh_core::element::desktop::{MenuItem, current_window, popup_menu, popup_menu_at};
 use nsh_core::prelude::*;
@@ -19,6 +17,7 @@ use scratch_ui_kit::prelude::*;
 use scratch_ui_kit::tokens;
 
 use super::debugger;
+use super::diagnostics;
 use super::execution;
 use super::files;
 use super::preferences;
@@ -26,11 +25,24 @@ use super::run_settings;
 use super::state::{self, display, with};
 use scratch_document::DocumentId;
 
-/// The cursor position of the active editor, 1-based, for the status bar.
+/// Placeholder root overlay slot (status bar popovers anchor directly to their buttons).
+pub(super) fn overlay() -> impl IntoElement {
+    view()
+}
+
+/// The cursor position and selection count of the active editor, 1-based, for the status bar.
 #[derive(Clone, PartialEq, Default)]
 struct CursorPosition {
     line: u32,
     column: u32,
+    selected_chars: usize,
+    selected_cols: Option<usize>,
+}
+
+#[derive(Clone, PartialEq, Default)]
+struct SymbolPopoverState {
+    open: bool,
+    filter: String,
 }
 
 /// The name the window reports to the system, so a change is sent once.
@@ -42,9 +54,12 @@ struct WindowTitle(String);
 #[derive(Clone, PartialEq, Default)]
 struct NarrowWindow(bool);
 
-/// Starts the status bar's polling of the cursor. Called once from the root.
+/// Starts reactive cursor/title observers. Called once from the root.
 pub fn install() {
-    set_interval(Duration::from_millis(200), refresh_cursor);
+    effect(|| {
+        let _ = display().with(|view| view.active);
+        refresh_cursor();
+    });
     // Below 720 pt the documentation panel closes (DESIGN 2.2). A user who
     // reopens it keeps it until the window narrows again.
     effect(move || {
@@ -77,14 +92,79 @@ pub fn install() {
     });
 }
 
-fn refresh_cursor() {
-    let next = with(|workspace| workspace.active)
-        .and_then(state::editor_api)
-        .and_then(|api| api.selections().first().map(|selection| selection.head))
-        .map_or(CursorPosition { line: 1, column: 1 }, |head| CursorPosition { line: head.line + 1, column: head.column + 1 });
+fn selection_char_count(text: &str, selections: &[EditorSelection]) -> usize {
+    selections
+        .iter()
+        .map(|sel| {
+            if sel.anchor == sel.head {
+                return 0;
+            }
+            let (start, end) = if (sel.anchor.line, sel.anchor.column) <= (sel.head.line, sel.head.column) {
+                (sel.anchor, sel.head)
+            } else {
+                (sel.head, sel.anchor)
+            };
+            let line_offset = |target_line: u32, target_col: u32| -> usize {
+                let mut offset = 0usize;
+                for (idx, line) in text.split('\n').enumerate() {
+                    if idx == target_line as usize {
+                        return offset + scratch_search::utf16_to_byte(line, target_col as usize);
+                    }
+                    offset += line.len() + 1;
+                }
+                text.len()
+            };
+            let a = line_offset(start.line, start.column);
+            let b = line_offset(end.line, end.column);
+            let lo = a.min(b).min(text.len());
+            let hi = a.max(b).min(text.len());
+            text[lo..hi].chars().count()
+        })
+        .sum()
+}
+
+/// Called by the mounted editor whenever its selection changes.
+pub(super) fn selection_changed(id: DocumentId, selections: &[EditorSelection]) {
+    let active = with(|workspace| workspace.active);
+    if active != Some(id) { return; }
+    let head = selections.last().or_else(|| selections.first()).map(|s| s.head);
+    let selected_chars = if selections.iter().all(|s| s.anchor == s.head) {
+        0
+    } else {
+        state::text(id)
+            .map(|text| selection_char_count(&text, selections))
+            .unwrap_or(0)
+    };
+    let selected_cols = if selections.len() == 1
+        && selections[0].anchor != selections[0].head
+        && selections[0].anchor.line == selections[0].head.line
+    {
+        Some(selections[0].anchor.column.abs_diff(selections[0].head.column) as usize)
+    } else {
+        None
+    };
+    let next = head.map_or(
+        CursorPosition { line: 1, column: 1, selected_chars: 0, selected_cols: None },
+        |pos| CursorPosition { line: pos.line + 1, column: pos.column + 1, selected_chars, selected_cols },
+    );
     let current = global::<CursorPosition>();
     if current.get_untracked() != next {
         current.set(next);
+    }
+}
+
+fn refresh_cursor() {
+    let active = with(|workspace| workspace.active);
+    if let Some(id) = active {
+        if let Some(api) = state::editor_api(id) {
+            selection_changed(id, &api.selections());
+            return;
+        }
+    }
+    let current = global::<CursorPosition>();
+    let reset = CursorPosition { line: 1, column: 1, selected_chars: 0, selected_cols: None };
+    if current.get_untracked() != reset {
+        current.set(reset);
     }
 }
 
@@ -92,6 +172,7 @@ fn refresh_cursor() {
 pub fn toggle_tab_bar() {
     motion::animate_panel();
     display().update(|view| view.tab_bar_visible = !view.tab_bar_visible);
+    with(|workspace| workspace.changed());
     super::state::bump_workspace_rev();
 }
 
@@ -99,6 +180,7 @@ pub fn toggle_tab_bar() {
 pub fn toggle_navigator() {
     motion::animate_panel();
     display().update(|view| view.sidebar_visible = !view.sidebar_visible);
+    with(|workspace| workspace.changed());
     super::state::bump_workspace_rev();
 }
 
@@ -147,6 +229,7 @@ pub fn toggle_console() {
 pub fn toggle_toolbar() {
     motion::animate_panel();
     display().update(|view| view.toolbar_visible = !view.toolbar_visible);
+    with(|workspace| workspace.changed());
     super::state::bump_workspace_rev();
 }
 
@@ -176,6 +259,7 @@ pub fn title_band() -> impl IntoElement {
         .items_center()
         .justify_center()
         .bg(tokens::toolbar)
+        .opacity(move || if display().with(|view| view.window_focused) { 1.0_f32 } else { 0.78_f32 })
         .window_drag(true)
         .child(dynamic(move || {
             let (title, dirty, language) = match active() {
@@ -210,11 +294,15 @@ pub fn title_band() -> impl IntoElement {
 pub fn toolbar() -> impl IntoElement {
     view().h(px(40.0)).w_full().flex_row().items_center().gap_2().px_3()
         .border_b_1().border_color(tokens::toolbar_border).bg(tokens::toolbar)
+        .opacity(move || if display().with(|view| view.window_focused) { 1.0_f32 } else { 0.78_f32 })
         .child(when(move || !display().with(|view| view.loading),
             || view().w(px(200.0)).min_w(px(120.0)).max_w(px(240.0)).child(language_popup())))
         .child(run_group())
         .child(view().flex_1())
         .child(when(move || window().width.0 >= 620.0, history_group))
+        .child(when(move || window().width.0 >= 560.0, || {
+            icon_button(IconName::Gear, "Preferences", IconButtonOptions::new().shortcut("⌥⌘,"), preferences::open)
+        }))
         .child(panel_toggles())
 }
 
@@ -265,6 +353,14 @@ pub(super) fn can_run() -> bool {
     })
 }
 
+fn run_primary_clicked() {
+    execution::run_active();
+}
+
+thread_local! {
+    static RUN_MENU_LONG_PRESSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn run_group() -> impl IntoElement {
     capsule_group("Run", CapsuleGroupOptions::new(), [
         dynamic(move || {
@@ -282,12 +378,32 @@ fn run_group() -> impl IntoElement {
                     .child(spinner(IconSize::Sm, Tone::Muted, "Stop")).into_element()
             } else {
                 let label = move || SharedString::from(if can_run() { "Run" } else { "No run command for this language" });
-                view().on_context_menu(|e: &ContextMenuEvent| { drop(popup_menu_at(run_menu(), e.page_position)); })
-                    .child(state_button(IconName::Run, label, IconButtonOptions::new().shortcut("⌘R"), move || active_running() || !can_run(), execution::run_active)).into_element()
+                view().relative().group()
+                    .on_context_menu(|e: &ContextMenuEvent| { drop(popup_menu_at(run_menu(), e.page_position)); })
+                    .on_long_press(|e: &PressEvent| {
+                        RUN_MENU_LONG_PRESSED.with(|flag| flag.set(true));
+                        let pos = e.page_position;
+                        Owner::detached().run(|| {
+                            spawn(async move {
+                                let _ = popup_menu_at(run_menu(), pos).await;
+                                RUN_MENU_LONG_PRESSED.with(|flag| flag.set(false));
+                            });
+                        });
+                    })
+                    .child(state_button(IconName::Run, label, IconButtonOptions::new().shortcut("⌘R"), move || active_running() || !can_run(), || {
+                        if RUN_MENU_LONG_PRESSED.with(|flag| flag.replace(false)) {
+                            return;
+                        }
+                        run_primary_clicked();
+                    }))
+                    .child(view().absolute().bottom(px(1.0)).right(px(1.0))
+                        .pointer_events(PointerEvents::None)
+                        .opacity(0.0)
+                        .group_hover(|s| s.opacity(0.85))
+                        .child(glyph_at(IconName::ChevronDown, 8.0, Tone::Muted)))
+                    .into_element()
             }
         }).into_element(),
-        icon_button(IconName::ChevronDown, "Run Options", IconButtonOptions::new(),
-            || { drop(popup_menu(run_menu())); }).into_element(),
         state_button(IconName::Stop, "Stop", IconButtonOptions::new().shortcut("⌘."), || !active_running(), execution::stop_active).into_element(),
         dynamic(move || {
             let custom = custom_run_settings();
@@ -310,8 +426,9 @@ fn run_menu() -> Vec<MenuItem> {
     vec![
         MenuItem::new("Run").disabled(running || !can_run).on_select(execution::run_active),
         MenuItem::new("Run and Debug").disabled(running || !can_run || !debugger_available()).on_select(debugger::run_in_debugger),
-        MenuItem::new("Run Without Debugging").disabled(running || !can_run).on_select(execution::run_active),
-        MenuItem::new(if compiles { "Compile" } else { "Run Diagnostics" }).on_select(super::diagnostics::run_diagnostics),
+        MenuItem::new("Run Without Debugging").disabled(running || !can_run).on_select(execution::run_without_debugging),
+        MenuItem::new("Run Selection").disabled(running || !can_run).on_select(execution::run_selection),
+        MenuItem::new(if compiles { "Compile" } else { "Run Diagnostics" }).on_select(execution::compile_or_diagnostics),
     ]
 }
 
@@ -336,7 +453,7 @@ fn panel_toggles() -> impl IntoElement {
     capsule_group("Panels", CapsuleGroupOptions::new(), [
         toggle(|| IconName::SidebarLeft, "Hide or show the Navigator", Some("⇧⌘H"), || display().with(|view| view.sidebar_visible), toggle_navigator),
         toggle(|| if super::console::console_on_right() { IconName::ConsoleRight } else { IconName::ConsoleBottom },
-            "Hide or show the Console", Some("⌘J"), || display().with(|view| view.console_visible), toggle_console),
+            "Hide or show the Console", Some("⇧⌘C"), || display().with(|view| view.console_visible), toggle_console),
         toggle(|| IconName::SidebarRight, "Hide or show the Documentation View", Some("⇧⌘I"), || display().with(|view| view.docs_visible), toggle_docs),
     ])
 }
@@ -352,6 +469,7 @@ pub fn toggle_docs() {
     }
     motion::animate_panel();
     display().update(|view| view.docs_visible = !view.docs_visible);
+    with(|workspace| workspace.changed());
     super::state::bump_workspace_rev();
 }
 
@@ -403,37 +521,52 @@ fn toggle(
 pub fn tab_bar() -> impl IntoElement {
     view().h(px(32.0)).w_full().flex_row().items_center().gap_1().px_2()
         .border_b_1().border_color(tokens::border).bg(tokens::tab_bar)
-        .child(tabs().flex_row().items_center().gap_1().flex_1().min_w(px(0.0)).overflow_hidden()
-            .indicator_style(|s| s.top_1().bottom_1().rounded_md().bg(tokens::tab_active))
-            .child(each(move || display().with(|view| view.tabs.clone()), |tab: &state::Tab| tab.id, |row, _| {
-                let id = row.get_untracked().id;
-                view().on_context_menu(move |e: &ContextMenuEvent| { drop(popup_menu_at(tab_menu(id), e.page_position)); })
-                .child(
-                tab().selected(move || display().with(|view| view.active == Some(id)))
-                    .on_press(move || state::activate(id))
-                    .accessibility_label(move || Some(SharedString::from(row.with(tab_title_tip))))
-                    .h(px(26.0)).flex_row().px_2().gap_1p5().items_center().rounded(move || px(tokens::radius()))
-                    .hover(|s| s.bg(tokens::tab_hover))
-                    .child(dynamic(move || {
-                        // The tile follows the tab's language row, not a
-                        // capture: a `set_language` on the document repaints
-                        // it (row subscribes to the tab's data).
-                        let language_id = row.with(|tab| tab.language_id.clone());
-                        if with(|workspace| workspace.doc(id).map(|doc| doc.running.get()).unwrap_or(false)) {
-                            spinner(IconSize::Xs, Tone::Muted, "Running").into_element()
-                        } else {
-                            language_glyph_tile(&language_id).into_element()
-                        }
-                    }))
-                    .child(text(move || row.with(|tab| tab.title.clone())).text_sm()
-                        .text_color(tokens::foreground).max_w(px(160.0)).truncate())
-                    .child(when(move || row.with(|tab| tab.dirty), || {
-                        view().w(px(6.0)).h(px(6.0)).rounded_full().bg(tokens::foreground).flex_shrink(0.0)
-                    }))
-                    .child(icon_button(IconName::Close, "Close Tab", IconButtonOptions::new().size(ControlSize::Xs),
-                        move || files::close(id))))
-            })))
-        .child(icon_button(IconName::Plus, "Create a new tab", IconButtonOptions::new().size(ControlSize::Sm).shortcut("⌘N"), state::new_document))
+        .opacity(move || if display().with(|view| view.window_focused) { 1.0_f32 } else { 0.78_f32 })
+        .child(view().flex_1().min_w(px(0.0)).h_full().flex_row().items_center()
+            .child(tabs().flex_row().items_center().gap_1().flex_shrink(1.0).min_w(px(0.0)).overflow_hidden()
+                .indicator_style(|s| s.top_1().bottom_1().rounded_md().bg(tokens::tab_active))
+                .child(each(move || display().with(|view| view.tabs.clone()), |tab: &state::Tab| tab.id, |row, _| {
+                    let id = row.get_untracked().id;
+                    view().group().on_context_menu(move |e: &ContextMenuEvent| { drop(popup_menu_at(tab_menu(id), e.page_position)); })
+                    .child(
+                    tab().selected(move || display().with(|view| view.active == Some(id)))
+                        .on_press(move || state::activate(id))
+                        .accessibility_label(move || Some(SharedString::from(row.with(tab_title_tip))))
+                        .h(px(26.0)).flex_row().px_2().gap_1p5().items_center().rounded(move || px(tokens::radius()))
+                        .hover(|s| s.bg(tokens::tab_hover))
+                        .child(dynamic(move || {
+                            // The tile follows the tab's language row, not a
+                            // capture: a `set_language` on the document repaints
+                            // it (row subscribes to the tab's data).
+                            let language_id = row.with(|tab| tab.language_id.clone());
+                            if with(|workspace| workspace.doc(id).map(|doc| doc.running.get()).unwrap_or(false)) {
+                                spinner(IconSize::Xs, Tone::Muted, "Running").into_element()
+                            } else {
+                                language_glyph_tile(&language_id).into_element()
+                            }
+                        }))
+                        .child(text(move || row.with(|tab| tab.title.clone())).text_sm()
+                            .text_color(move || if display().with(|view| view.active == Some(id)) { tokens::tab_active_foreground() } else { tokens::tab_foreground() })
+                            .max_w(px(160.0)).truncate())
+                        .child(view().relative().w(px(16.0)).h(px(16.0)).items_center().justify_center().flex_shrink(0.0)
+                            .child(when(move || row.with(|tab| tab.dirty), || {
+                                view().w(px(6.0)).h(px(6.0)).rounded_full().bg(tokens::foreground)
+                                    .group_hover(|s| s.opacity(0.0))
+                            }))
+                            .child(view().absolute().inset_0().items_center().justify_center()
+                                .opacity(0.0)
+                                .style_when(move || !row.with(|tab| tab.dirty) && display().with(|view| view.active == Some(id)), |s| s.opacity(0.65))
+                                .group_hover(|s| s.opacity(1.0))
+                                .child(icon_button(IconName::Close, "Close Tab", IconButtonOptions::new().size(ControlSize::Xs),
+                                    move || files::close(id))))))
+                })))
+            .child(view().flex_1().h_full().min_w(px(12.0))
+                .on_press(|e: &PressEvent| {
+                    if e.clicks >= 2 {
+                        state::new_document();
+                    }
+                })))
+        .child(icon_button(IconName::Plus, "Create a new tab", IconButtonOptions::new().size(ControlSize::Sm).shortcut("⌘T"), state::new_document))
         .child(icon_button(IconName::ChevronDown, "Show all tabs", IconButtonOptions::new().size(ControlSize::Sm),
             || { spawn(async { let _ = popup_menu(tab_list_menu()).await; }); }))
 }
@@ -467,44 +600,88 @@ fn tab_list_menu() -> Vec<MenuItem> {
 /// symbol, indentation and position status popups on the right.
 pub fn status_bar() -> impl IntoElement {
     view().h(px(24.0)).w_full().flex_row().items_center().gap_3().px_3()
-        .border_t_1().border_color(tokens::border).bg(tokens::status_bar)
+        .border_t_1().border_color(tokens::editor_bar_border).bg(tokens::editor_bar)
+        .text_color(tokens::editor_bar_foreground)
         .child(dynamic(run_status))
-        .child(text(move || {
-            let notice = display().with(|view| view.notice.clone());
-            if notice.is_empty() { "Ready".to_owned() } else { notice }
-        }).text_xs().text_color(tokens::muted_foreground).flex_1().min_w(px(0.0)).truncate())
+        .child(dynamic(diagnostics_badge))
+        .child(text(move || display().with(|view| view.notice.clone()))
+            .text_xs().text_color(tokens::editor_bar_foreground).flex_1().min_w(px(0.0)).truncate())
         .child(symbol_button())
         .child(indentation_button())
         .child(position_button())
 }
 
-/// The active document's run state item: a spinner while running, then the
-/// outcome's icon and text.
+/// Clickable error/warning diagnostic counts for the active document.
+fn diagnostics_badge() -> AnyElement {
+    let _ = display().with(|view| view.active);
+    let _ = global::<state::WorkspaceRevision>().get();
+    let counts = with(|workspace| {
+        let doc = workspace.active.and_then(|id| workspace.doc(id))?;
+        let _ = doc.diag_rev.get();
+        Some(doc.annotations.counts())
+    }).unwrap_or_default();
+    if counts.errors == 0 && counts.warnings == 0 {
+        return view().into_element();
+    }
+    nsh_base::button()
+        .accessibility_label("Jump to next diagnostic")
+        .flex_row().items_center().gap_1p5().h(px(18.0)).px_1p5().rounded(px(tokens::radius_sm()))
+        .cursor_pointer()
+        .hover(|s| s.bg(tokens::accent))
+        .on_press(move || diagnostics::jump(true, counts.errors > 0))
+        .when(counts.errors > 0, |el| {
+            el.child(view().flex_row().items_center().gap_0p5()
+                .child(glyph(IconName::ErrorCircle, IconSize::Xs, Tone::Danger))
+                .child(text(counts.errors.to_string()).text_xs().text_color(tokens::editor_bar_foreground)))
+        })
+        .when(counts.warnings > 0, |el| {
+            el.child(view().flex_row().items_center().gap_0p5()
+                .child(glyph(IconName::WarningTriangle, IconSize::Xs, Tone::Warning))
+                .child(text(counts.warnings.to_string()).text_xs().text_color(tokens::editor_bar_foreground)))
+        })
+        .into_element()
+}
+
+/// The active document's run state item: a spinner while running with live
+/// CPU/memory telemetry, then the outcome's icon, status, and "Show Console".
 fn run_status() -> AnyElement {
     // The active read keeps this dynamic subscribed to document switches.
     let _ = display().with(|view| view.active);
-    let (status, running) = with(|workspace| {
+    let console_visible = display().with(|view| view.console_visible);
+    let (status, running, stats, exit_info) = with(|workspace| {
         workspace.active.and_then(|id| workspace.doc(id))
-            .map(|doc| (doc.status.get(), doc.running.get()))
-            .unwrap_or(("Ready".to_owned(), false))
+            .map(|doc| (doc.status.get(), doc.running.get(), doc.run_stats.get(), doc.exit_info.get()))
+            .unwrap_or(("Ready".to_owned(), false, None, None))
     });
-    if !running && status == "Ready" { return view().into_element(); }
+    if !running && status == "Ready" && exit_info.is_none() { return view().into_element(); }
     let appear = motion().entering(motion::fade_in_rise(motion::fast()));
-    let mut row = view().flex_row().items_center().gap_1().flex_shrink(0.0);
+    let mut row = view().flex_row().items_center().gap_1p5().flex_shrink(0.0);
     if running {
         row = row.child(spinner(IconSize::Xs, Tone::Muted, "Running"));
+        let label = match stats {
+            Some((cpu, rss)) if rss > 0 => format!("{status} · {cpu:.0}% CPU · {:.1} MB", rss as f64 / (1024.0 * 1024.0)),
+            Some((cpu, _)) if cpu > 0.0 => format!("{status} · {cpu:.0}% CPU"),
+            _ => status,
+        };
+        row = row.child(text(label).text_xs().text_color(tokens::editor_bar_foreground));
     } else {
         let lower = status.to_lowercase();
-        let (icon, tone) = if lower.contains("succeeded") || lower.contains("ended") {
-            (IconName::SuccessCircle, Tone::Success)
-        } else if lower.contains("fail") || lower.contains("error") {
-            (IconName::ErrorCircle, Tone::Danger)
-        } else if lower.contains("stopped") || lower.contains("disconnected") {
-            (IconName::StopCircle, Tone::Muted)
-        } else { (IconName::InfoCircle, Tone::Muted) };
-        row = row.child(glyph(icon, IconSize::Xs, tone));
+        let (icon, tone) = match &exit_info {
+            Some(info) if info.canceled => (IconName::StopCircle, Tone::Muted),
+            Some(info) if info.code == Some(0) => (IconName::SuccessCircle, Tone::Success),
+            Some(_) => (IconName::ErrorCircle, Tone::Danger),
+            None if lower.contains("succeeded") || lower.contains("ended") => (IconName::SuccessCircle, Tone::Success),
+            None if lower.contains("fail") || lower.contains("error") => (IconName::ErrorCircle, Tone::Danger),
+            None if lower.contains("stopped") || lower.contains("disconnected") => (IconName::StopCircle, Tone::Muted),
+            None => (IconName::InfoCircle, Tone::Muted),
+        };
+        row = row.child(glyph(icon, IconSize::Xs, tone))
+            .child(text(status).text_xs().text_color(tokens::editor_bar_foreground));
+        if !console_visible {
+            row = row.child(status_button("Show Console", false, toggle_console));
+        }
     }
-    row.bind_motion(&appear).child(text(status).text_xs().text_color(tokens::foreground)).into_element()
+    row.bind_motion(&appear).into_element()
 }
 
 /// A status item that opens a native menu (or runs `action`) on press: the
@@ -527,7 +704,7 @@ fn status_button(
         .when(!motion::reduced(), motion::press)
         .active(|s| motion::press_scale(s, true))
         .on_press(action)
-        .child(text(move || shown.get()).text_xs().text_color(tokens::foreground).number_of_lines(1));
+        .child(text(move || shown.get()).text_xs().text_color(tokens::editor_bar_foreground).number_of_lines(1));
     if menu { item = item.child(glyph(IconName::ChevronsUpDown, IconSize::Xs, Tone::Muted)); }
     item
 }
@@ -542,20 +719,85 @@ fn symbol_at_caret() -> Option<scratch_search::Symbol> {
 }
 
 fn symbol_button() -> impl IntoElement {
-    status_button(
-        move || SharedString::from(symbol_at_caret().map(|symbol| symbol.name).unwrap_or_else(|| "No Symbols".to_owned())),
-        true,
-        || { spawn(async { let _ = popup_menu(symbol_menu()).await; }); })
-}
-
-/// The symbol menu: the active document's symbols, jumping on select.
-fn symbol_menu() -> Vec<MenuItem> {
-    let symbols = super::quick_open::active_symbols();
-    if symbols.is_empty() { return vec![MenuItem::new("No Symbols").disabled(true)]; }
-    symbols.into_iter().take(60).map(|symbol| {
-        let (line, column) = (symbol.line, symbol.column);
-        MenuItem::new(format!("{}  ·  {}", symbol.name, symbol.kind.label())).on_select(move || jump_to_position(line, column))
-    }).collect()
+    let state = global::<SymbolPopoverState>();
+    popover()
+        .open(move || Some(state.with(|s| s.open)))
+        .on_open_change(move |event: &PopoverEvent| {
+            if let PopoverEvent::OpenChange(open, _) = event {
+                state.update(|s| {
+                    s.open = *open;
+                    if !open { s.filter.clear(); }
+                });
+            }
+        })
+        .placement(Placement::Top)
+        .offset(px(6.0))
+        .margin(px(8.0))
+        .popup_style(|s| {
+            s.w(px(280.0))
+                .max_h(px(320.0))
+                .p_2()
+                .gap_1p5()
+                .rounded(px(tokens::radius_lg()))
+                .bg(tokens::popover())
+                .border_1()
+                .border_color(tokens::border())
+                .shadow_md()
+                .shadow_color(tokens::shadow())
+        })
+        .popup_starting_style(motion::popup_starting)
+        .popup_ending_style(motion::popup_ending)
+        .trigger(status_button(
+            move || SharedString::from(symbol_at_caret().map(|symbol| symbol.name).unwrap_or_else(|| "No Symbols".to_owned())),
+            true,
+            move || {
+                state.update(|s| {
+                    s.open = !s.open;
+                    if s.open { s.filter.clear(); }
+                });
+            },
+        ))
+        .child(view().flex_col().gap_1p5().w_full()
+            .child(search_field(
+                "Filter symbols…",
+                move || SharedString::from(state.with(|s| s.filter.clone())),
+                move || None,
+                move |q: &str| state.update(|s| s.filter = q.to_owned()),
+                move || state.update(|s| s.filter.clear()),
+                SearchFieldOptions::new().size(ControlSize::Sm),
+            ))
+            .child(scroll().max_h(px(250.0)).w_full()
+                .child(dynamic(move || {
+                    if !state.with(|s| s.open) {
+                        return view().into_element();
+                    }
+                    let query = state.with(|s| s.filter.to_lowercase());
+                    let filtered: Vec<_> = super::quick_open::active_symbols()
+                        .into_iter()
+                        .filter(|sym| query.is_empty() || sym.name.to_lowercase().contains(&query))
+                        .take(120)
+                        .collect();
+                    if filtered.is_empty() {
+                        return view().p_3().items_center().justify_center()
+                            .child(text("No matching symbols").text_xs().text_color(tokens::muted_foreground))
+                            .into_element();
+                    }
+                    view().flex_col().gap_0p5().children(filtered.into_iter().map(|sym| {
+                        let (line, column) = (sym.line, sym.column);
+                        nsh_base::button()
+                            .w_full().h(px(tokens::row_sm())).px_2().flex_row().items_center().gap_2()
+                            .rounded(px(tokens::radius_sm()))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(tokens::accent))
+                            .on_press(move || {
+                                state.update(|s| { s.open = false; s.filter.clear(); });
+                                jump_to_position(line, column);
+                            })
+                            .child(text(sym.kind.label()).text_xs().text_color(tokens::muted_foreground).w(px(58.0)).truncate())
+                            .child(text(sym.name).text_xs().text_color(tokens::popover_foreground).flex_1().min_w(px(0.0)).truncate())
+                            .child(text(format!("L{}", line + 1)).text_xs().text_color(tokens::muted_foreground))
+                    })).into_element()
+                }))))
 }
 
 /// Moves the active caret to 0-based `line`/`column` (symbol jumps).
@@ -570,6 +812,53 @@ fn jump_to_position(line: u32, column: u32) {
     }
 }
 
+/// Converts leading indentation of every line in the active document to spaces or tabs.
+fn convert_indentation(to_spaces: bool) {
+    let Some(id) = with(|workspace| workspace.active) else { return; };
+    let Some(api) = state::editor_api(id) else { return; };
+    let width = preferences::settings().with_untracked(|s| s.text_editing.indentation.tab_width).max(1) as usize;
+    let source = api.value();
+    let mut out = String::with_capacity(source.len());
+    for (idx, segment) in source.split_inclusive('\n').enumerate() {
+        let _ = idx;
+        let (line_body, ending) = if let Some(stripped) = segment.strip_suffix("\r\n") {
+            (stripped, "\r\n")
+        } else if let Some(stripped) = segment.strip_suffix('\n') {
+            (stripped, "\n")
+        } else {
+            (segment, "")
+        };
+        let mut cols = 0usize;
+        let mut split_at = 0usize;
+        for (byte_idx, ch) in line_body.char_indices() {
+            match ch {
+                ' ' => {
+                    cols += 1;
+                    split_at = byte_idx + 1;
+                }
+                '\t' => {
+                    let rem = cols % width;
+                    cols += width - rem;
+                    split_at = byte_idx + 1;
+                }
+                _ => break,
+            }
+        }
+        if to_spaces {
+            for _ in 0..cols { out.push(' '); }
+        } else {
+            for _ in 0..(cols / width) { out.push('\t'); }
+            for _ in 0..(cols % width) { out.push(' '); }
+        }
+        out.push_str(&line_body[split_at..]);
+        out.push_str(ending);
+    }
+    if out != source {
+        api.set_value(out);
+    }
+    preferences::write(move |prefs| prefs.text_editing.indentation.soft_tabs = to_spaces);
+}
+
 /// The indentation popup: `Tabs: 4` / `Spaces: 4`.
 fn indentation_button() -> impl IntoElement {
     status_button(
@@ -581,7 +870,7 @@ fn indentation_button() -> impl IntoElement {
         || { spawn(async { let _ = popup_menu(indentation_menu()).await; }); })
 }
 
-/// The indentation menu (DESIGN 8.6.5): Tabs/Spaces and the widths.
+/// The indentation menu (DESIGN 8.6.5): Tabs/Spaces, widths, and conversion.
 fn indentation_menu() -> Vec<MenuItem> {
     let (soft_tabs, width) = preferences::settings()
         .with_untracked(|settings| (settings.text_editing.indentation.soft_tabs, settings.text_editing.indentation.tab_width));
@@ -596,6 +885,9 @@ fn indentation_menu() -> Vec<MenuItem> {
         items.push(MenuItem::new(size.to_string()).checked(width == size)
             .on_select(move || preferences::write(move |prefs| prefs.text_editing.indentation.tab_width = size)));
     }
+    items.push(MenuItem::separator());
+    items.push(MenuItem::new("Convert Indentation to Spaces").on_select(|| convert_indentation(true)));
+    items.push(MenuItem::new("Convert Indentation to Tabs").on_select(|| convert_indentation(false)));
     items
 }
 
@@ -604,8 +896,34 @@ fn position_button() -> impl IntoElement {
     status_button(
         move || {
             let position = global::<CursorPosition>().get();
-            SharedString::from(format!("Line {}, Column {}", position.line, position.column))
+            let use_cols = preferences::settings().with(|p| p.advanced.selection_label_uses_columns);
+            if position.selected_chars > 0 {
+                if use_cols && let Some(cols) = position.selected_cols {
+                    let unit = if cols == 1 { "col" } else { "cols" };
+                    SharedString::from(format!("Line {}, Column {} ({cols} {unit})", position.line, position.column))
+                } else {
+                    SharedString::from(format!("Line {}, Column {} ({} sel)", position.line, position.column, position.selected_chars))
+                }
+            } else {
+                SharedString::from(format!("Line {}, Column {}", position.line, position.column))
+            }
         },
         false,
         super::find::go_to_line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_char_count_handles_utf16_surrogates() {
+        let text = "a😀b\ncd";
+        let emoji = EditorSelection::new(EditorPosition::new(0, 1), EditorPosition::new(0, 3));
+        assert_eq!(selection_char_count(text, &[emoji]), 1);
+        let to_b = EditorSelection::new(EditorPosition::new(0, 1), EditorPosition::new(0, 4));
+        assert_eq!(selection_char_count(text, &[to_b]), 2);
+        let across_lines = EditorSelection::new(EditorPosition::new(0, 3), EditorPosition::new(1, 2));
+        assert_eq!(selection_char_count(text, &[across_lines]), 4);
+    }
 }

@@ -224,6 +224,7 @@ fn argument_preview(arguments: &str) -> Option<String> {
 struct Target {
     id: DocumentId,
     title: String,
+    language_id: String,
     language: String,
     folder: Option<PathBuf>,
     defaults: Defaults,
@@ -245,6 +246,7 @@ pub fn open() {
         Some(Target {
             id,
             title: doc.title.clone(),
+            language_id: doc.document.language.clone(),
             language: language.map_or_else(|| doc.document.language.clone(), |def| def.name.clone()),
             folder: state::saved_path(&doc.document).and_then(|path| path.parent().map(PathBuf::from)),
             draft: Draft::of(&doc.document.run, &defaults),
@@ -252,6 +254,52 @@ pub fn open() {
         })
     });
     if let Some(target) = target { open_sheet().set(Open(Some(target))); }
+}
+
+fn show_help() {
+    Owner::detached().run(|| spawn(async {
+        let _ = nsh_base::alert_dialog()
+            .title("Run Settings")
+            .description(
+                "Run Command overrides the language's launch command ($filename is replaced with the source file, $compiler with the compiled output).\n\n\
+                 Compile Flags override compiler arguments for compiled languages.\n\n\
+                 Program Input is piped to standard input, or provided as a file path in $CR_INPUT when checked."
+            )
+            .action("ok", "OK")
+            .show()
+            .await;
+    }));
+}
+
+fn make_default(language_id: &str, language_name: &str, compiles: bool, run_command: &str, compile_flags: &str) -> bool {
+    let command = run_command.trim().to_owned();
+    let flags = compile_flags.trim().to_owned();
+    let result = with(|workspace| {
+        let Some(registry) = workspace.registry.as_mut() else {
+            return Err("Language registry not loaded.".to_owned());
+        };
+        let Some(mut def) = registry.get(language_id).cloned() else {
+            return Err("Unknown language.".to_owned());
+        };
+        if !command.is_empty() {
+            def.run.command = command.clone();
+        }
+        if compiles {
+            def.run.flags = flags.clone();
+        }
+        registry.save(def).map_err(|e| e.to_string())
+    });
+    match result {
+        Ok(()) => {
+            global::<state::RegistryRevision>().update(|rev| rev.0 += 1);
+            state::notice(format!("Saved default run settings for {language_name}."));
+            true
+        }
+        Err(error) => {
+            state::notice(format!("Could not save default settings: {error}"));
+            false
+        }
+    }
 }
 
 fn close() { open_sheet().set(Open(None)); }
@@ -285,7 +333,7 @@ pub fn overlay() -> impl IntoElement {
 fn rise() -> MotionSpec { motion::fade_in_rise(motion::base()) }
 
 fn sheet(target: Target) -> impl IntoElement {
-    let Target { id, title, language, folder, defaults, draft } = target;
+    let Target { id, title, language_id, language, folder, defaults, draft } = target;
     let run_command = signal(draft.run_command.clone());
     let compile_flags = signal(draft.compile_flags.clone());
     let arguments = signal(draft.arguments.clone());
@@ -296,9 +344,8 @@ fn sheet(target: Target) -> impl IntoElement {
     let chosen_folder = signal(draft.folder);
     let custom = signal(draft.custom_folder.clone());
     let compiles = defaults.compiles;
-    let command_default = defaults.command.clone();
-    let flags_default = defaults.flags.clone();
-    let defaults = stored(defaults);
+    let initial_cmd = defaults.command.clone();
+    let defaults = signal(defaults);
 
     let current = move || Draft {
         run_command: run_command.get(),
@@ -328,16 +375,22 @@ fn sheet(target: Target) -> impl IntoElement {
     let body = view().px(px(20.0)).pb(px(4.0)).gap(px(12.0))
         .child(labelled("Run Command:", view().gap(px(6.0))
             .child(code_field(move || Some(SharedString::from(run_command.get())), {
-                let default = command_default.clone();
-                move |text: &SharedString| set_with_banner(run_command, text.to_string(), &default, command_override)
+                move |text: &SharedString| {
+                    let default = defaults.with_untracked(|d| d.command.clone());
+                    set_with_banner(run_command, text.to_string(), &default, command_override);
+                }
             }, CodeFieldOptions::new("shell").min_rows(2).max_rows(4).accessibility_label("Run Command")
-                .placeholder(if command_default.trim().is_empty() { "This language has no run command".to_owned() } else { command_default.clone() })))
+                .placeholder(if initial_cmd.trim().is_empty() { "This language has no run command".to_owned() } else { initial_cmd })))
             .child(banner("Run command is specific to this file.", {
-                let default = command_default.clone();
-                move || command_override(&run_command.get(), &default).is_some()
+                move || {
+                    let default = defaults.with(|d| d.command.clone());
+                    command_override(&run_command.get(), &default).is_some()
+                }
             }, {
-                let default = command_default.clone();
-                move || set_with_banner(run_command, default.clone(), &default, command_override)
+                move || {
+                    let default = defaults.with_untracked(|d| d.command.clone());
+                    set_with_banner(run_command, default.clone(), &default, command_override);
+                }
             }))))
         .child(labelled("Arguments:", view().gap(px(4.0))
             .child(text_field("None", move || SharedString::from(arguments.get()), move |text: &str| arguments.set(text.to_owned()),
@@ -345,15 +398,21 @@ fn sheet(target: Target) -> impl IntoElement {
             .child(hint_or_problem(move || argument_preview(&arguments.get()).map(|list| format!("The program gets {list}.")), move || problem(Field::Arguments)))))
         .when(compiles, |body| body.child(labelled("Compile Flags:", view().gap(px(6.0))
             .child(text_field("None", move || SharedString::from(compile_flags.get()), {
-                let default = flags_default.clone();
-                move |text: &str| set_with_banner(compile_flags, text.to_owned(), &default, flags_override)
+                move |text: &str| {
+                    let default = defaults.with_untracked(|d| d.flags.clone());
+                    set_with_banner(compile_flags, text.to_owned(), &default, flags_override);
+                }
             }, TextFieldOptions::new().mono(true).accessibility_label("Compile Flags"), None))
             .child(banner("Compile flags are specific to this file.", {
-                let default = flags_default.clone();
-                move || flags_override(&compile_flags.get(), &default).is_some()
+                move || {
+                    let default = defaults.with(|d| d.flags.clone());
+                    flags_override(&compile_flags.get(), &default).is_some()
+                }
             }, {
-                let default = flags_default.clone();
-                move || set_with_banner(compile_flags, default.clone(), &default, flags_override)
+                move || {
+                    let default = defaults.with_untracked(|d| d.flags.clone());
+                    set_with_banner(compile_flags, default.clone(), &default, flags_override);
+                }
             })))))
         .child(labelled("Program Input:", view().gap(px(8.0))
             .child(text_area("Text the program reads", move || SharedString::from(program_input.get()), move |text: &str| program_input.set(text.to_owned()),
@@ -380,7 +439,28 @@ fn sheet(target: Target) -> impl IntoElement {
                     .child(type_subhead().semibold().apply(text("Run Settings")).text_color(tokens::foreground))
                     .child(type_body().apply(text(format!("{title} · {language}"))).number_of_lines(1).text_color(tokens::muted_foreground)))
                 .child(scroll().flex_shrink(1.0).min_h(px(0.0)).child(body))
-                .child(view().flex_row().justify_end().gap(px(8.0)).px(px(20.0)).pt(px(16.0)).pb(px(20.0))
+                .child(view().flex_row().items_center().gap(px(8.0)).px(px(20.0)).pt(px(16.0)).pb(px(20.0))
+                    .child(icon_button(IconName::HelpCircle, "Run Settings Help", IconButtonOptions::new().size(ControlSize::Sm), show_help))
+                    .child(button("Make Default", ButtonOptions::new().variant(ButtonVariant::Default).size(ControlSize::Lg), {
+                        let language_id = language_id.clone();
+                        let language = language.clone();
+                        move || {
+                            let cmd = run_command.get_untracked();
+                            let flg = compile_flags.get_untracked();
+                            if make_default(&language_id, &language, compiles, &cmd, &flg) {
+                                defaults.update(|d| {
+                                    let c = cmd.trim();
+                                    if !c.is_empty() {
+                                        d.command = c.to_owned();
+                                    }
+                                    if compiles {
+                                        d.flags = flg.trim().to_owned();
+                                    }
+                                });
+                            }
+                        }
+                    }))
+                    .child(view().flex_1())
                     .child(button("Cancel", ButtonOptions::new().variant(ButtonVariant::Default).size(ControlSize::Lg), close))
                     .child(dynamic(move || {
                         let ready = ready.get();
@@ -595,5 +675,21 @@ mod tests {
         assert_eq!(argument_preview(r#"one "two words""#).as_deref(), Some("[one] [two words]"));
         assert_eq!(argument_preview("  "), None);
         assert_eq!(argument_preview("\"open"), None);
+    }
+
+    #[test]
+    fn settle_clears_overrides_after_defaults_update() {
+        let mut defaults = c();
+        let draft = Draft {
+            run_command: "$compiler --custom".into(),
+            compile_flags: "-O3".into(),
+            ..Draft::of(&SavedRun::default(), &defaults)
+        };
+        assert_eq!(settle(&draft, &defaults, None).unwrap().run_command.as_deref(), Some("$compiler --custom"));
+        defaults.command = "$compiler --custom".into();
+        defaults.flags = "-O3".into();
+        let settled = settle(&draft, &defaults, None).unwrap();
+        assert_eq!(settled.run_command, None);
+        assert_eq!(settled.compiler_flags, None);
     }
 }

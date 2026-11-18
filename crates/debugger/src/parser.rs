@@ -1341,4 +1341,55 @@ frames = "(?m)^#(?<index>\\d+) (?<name>\\S+) (?<file>\\S+):(?<line>\\d+)$"
             "error: use of undeclared identifier 'x'"
         );
     }
+
+    #[test]
+    fn gdb_adapter_parses_multiline_stack_vars_and_stop() {
+        let adapter = crate::adapter::AdapterRegistry::builtin()
+            .get("gdb")
+            .expect("gdb adapter")
+            .clone();
+        let patterns = CompiledPatterns::new(&adapter).unwrap();
+        let bt = "#0  helper (n=3) at /work/main.c:4\n#1  0x00001234 in main () at /work/main.c:10\n";
+        let stack = parse_generic_stack(bt, &patterns, &SourceMap::new(), Path::new("/work"));
+        assert_eq!(stack.frames.len(), 2);
+        assert!(stack.frames[0].current);
+        assert!(!stack.frames[1].current);
+        assert_eq!(stack.frames[0].line, Some(4));
+        assert_eq!(stack.frames[1].name, "main");
+
+        let vars = parse_generic_variables("x = 42\nmsg = \"hi\"\n", &patterns);
+        assert_eq!(vars.len(), 2);
+        assert_eq!(vars[0].name, "x");
+        assert_eq!(vars[0].value.as_deref(), Some("42"));
+        assert_eq!(vars[1].name, "msg");
+
+        let bp_stop = "Breakpoint 1, main () at /work/main.c:10\n";
+        let loc = crate::session::parse_generic_stop(bp_stop, &patterns, &SourceMap::new(), Path::new("/work")).unwrap();
+        assert_eq!(loc.line, Some(10));
+        assert_eq!(loc.file.as_deref(), Some(Path::new("/work/main.c")));
+    }
+
+    #[test]
+    fn xdebug_adapter_ignores_host_port_and_parses_stack_and_vars() {
+        let adapter = crate::adapter::AdapterRegistry::builtin()
+            .get("xdebug")
+            .expect("xdebug adapter")
+            .clone();
+        let patterns = CompiledPatterns::new(&adapter).unwrap();
+        assert!(
+            crate::session::parse_generic_stop("Listening on 127.0.0.1:9003\n", &patterns, &SourceMap::new(), Path::new("/work")).is_none(),
+            "host:port should not trigger stop_location"
+        );
+        let loc = crate::session::parse_generic_stop("stopped at /work/app.php:12\n", &patterns, &SourceMap::new(), Path::new("/work")).unwrap();
+        assert_eq!(loc.line, Some(12));
+        assert_eq!(loc.file.as_deref(), Some(Path::new("/work/app.php")));
+
+        let stack = parse_generic_stack("#0 main /work/app.php:12\n#1 {main} /work/app.php:20\n", &patterns, &SourceMap::new(), Path::new("/work"));
+        assert_eq!(stack.frames.len(), 2);
+
+        let vars = parse_generic_variables("$count = 5\n$name = 'alice'\n", &patterns);
+        assert_eq!(vars.len(), 2);
+        assert_eq!(vars[0].name, "count");
+        assert_eq!(vars[0].value.as_deref(), Some("5"));
+    }
 }

@@ -264,25 +264,34 @@ fn show(pane: Category) {
 }
 
 fn choose(pane: Category) {
+    disarm_recording();
     flush();
     ui().update(|w| w.pane = pane);
     write(|prefs| prefs.ui.selected_preferences_pane = pane.identifier().to_owned());
 }
 
+fn pane_height(pane: Category) -> f32 {
+    match pane {
+        Category::General | Category::Shell | Category::Advanced => 540.0,
+        Category::TextEditing | Category::Languages | Category::Keyboard | Category::Themes => 660.0,
+    }
+}
+
 /// The window, mounted once at the root.
 pub fn overlay() -> impl IntoElement {
     let mut attributes = WindowAttributes::default();
-    attributes.min_size = Some(Some(Size::new(px(700.0), px(500.0))));
+    attributes.min_size = Some(Some(Size::new(px(760.0), px(500.0))));
     attributes.resizable = Some(true);
     window()
         .id(WINDOW_ID)
         .kind(WindowKind::Dialog)
         .title(move || format!("Preferences \u{2013} {}", ui().with(|w| w.pane.title())))
-        .default_size(Size::new(px(780.0), px(620.0)))
+        .default_size(Size::new(px(880.0), px(640.0)))
         .attributes(attributes)
         .open(move || ui().with(|w| w.open))
         .on_open_change(|change: &OpenChange| {
             if !change.open {
+                disarm_recording();
                 flush();
                 ui().update(|w| w.open = false);
             }
@@ -292,6 +301,21 @@ pub fn overlay() -> impl IntoElement {
 
 fn content() -> impl IntoElement {
     let pane = computed(move || ui().with(|w| w.pane));
+    let win = nsh_core::element::desktop::current_window();
+    let first_mount = std::cell::Cell::new(true);
+    effect(move || {
+        let current = pane.get();
+        if first_mount.replace(false) {
+            return;
+        }
+        win.set_bounds(nsh_core::desktop::WindowFrame {
+            x: None,
+            y: None,
+            width: None,
+            height: Some(px(pane_height(current))),
+            animated: Some(true),
+        });
+    });
     view().flex_1().flex_col().min_h(px(0.0)).bg(tokens::background).text_color(tokens::foreground)
         .child(prefs_toolbar(pane))
         .child(view().flex_1().min_w(px(0.0)).min_h(px(0.0))
@@ -344,7 +368,6 @@ fn list_tab(selected: Memo<bool>, on_press: impl Fn() + 'static) -> nsh_base::Ta
 }
 
 fn pane_view(pane: Category) -> View {
-    let fade = motion().entering(MotionPreset::FadeIn);
     let body = match pane {
         Category::General => form(general()).into_element(),
         Category::TextEditing => text_editing().into_element(),
@@ -354,7 +377,7 @@ fn pane_view(pane: Category) -> View {
         Category::Themes => themes().into_element(),
         Category::Advanced => form(advanced()).into_element(),
     };
-    view().flex_1().min_h(px(0.0)).bind_motion(&fade).child(body)
+    view().flex_1().min_h(px(0.0)).child(body)
 }
 
 // ------------------------------------------------------------ form pieces
@@ -391,7 +414,7 @@ fn card(rows: Vec<AnyElement>) -> View {
 /// rows — no card, the hairlines between sections do the grouping.
 fn section(title: &'static str, rows: Vec<AnyElement>) -> AnyElement {
     view().gap_2()
-        .child(section_header(title, SectionHeaderVariant::Form, SectionHeaderOptions::new()))
+        .child(section_header(title, SectionHeaderVariant::Form, SectionHeaderOptions::new().divider(false)))
         .child(view().w_full().gap(px(8.0)).children(rows))
         .into_element()
 }
@@ -508,6 +531,7 @@ fn general() -> Vec<AnyElement> {
         ]),
         section("Tabs", vec![
             check("Prefer opening new documents in tabs", |p| p.general.tabs.prefer_tabs, |p, v| p.general.tabs.prefer_tabs = v),
+            check("Hide tab bar by default", |p| p.general.tabs.tab_bar_hidden, |p, v| p.general.tabs.tab_bar_hidden = v),
             row("Insert New Tabs:", choice("Insert New Tabs", vec![
                 opt(InsertNewTabs::AfterExisting, "After existing tabs"),
                 opt(InsertNewTabs::BeforeExisting, "Before existing tabs"),
@@ -522,6 +546,9 @@ fn general() -> Vec<AnyElement> {
         section("File Navigator", vec![
             check("Show hidden files and folders", |p| p.general.file_navigator.show_hidden_files, |p, v| p.general.file_navigator.show_hidden_files = v),
             check("Sort folders on top", |p| p.general.file_navigator.sort_folders_on_top, |p, v| p.general.file_navigator.sort_folders_on_top = v),
+        ]),
+        section("Notifications", vec![
+            check("Show notifications while the app is inactive", |p| p.general.notifications.enabled, |p, v| p.general.notifications.enabled = v),
         ]),
     ]
 }
@@ -665,12 +692,23 @@ fn text_sections(sections: Vec<AnyElement>) -> AnyElement {
 }
 
 fn text_appearance() -> AnyElement {
+    let insertion_styles = || {
+        vec![
+            opt(InsertionPointStyle::Bar, "Bar"),
+            opt(InsertionPointStyle::Block, "Block"),
+            opt(InsertionPointStyle::Underline, "Underline"),
+        ]
+    };
     text_sections(vec![
         section("Font", vec![
             row("Font:", view().flex_row().items_center().gap_2()
                 .child(view().w(px(180.0)).child(font_family_popup()))
                 .child(number("Font size", NumberFieldOptions::new().range(6.0, 72.0).suffix("pt"), |p| p.text_editing.appearance.font.size, |p, v| p.text_editing.appearance.font.size = v))
                 .child(button("Select…", ButtonOptions::new().variant(ButtonVariant::Default), super::edit::show_fonts))),
+            row("", view().flex_row().items_center().gap_4()
+                .child(check_box("Ligatures", |p| p.text_editing.appearance.font.ligatures, |p, v| p.text_editing.appearance.font.ligatures = v))
+                .child(check_box("Antialiasing", |p| p.text_editing.appearance.font.antialiasing, |p, v| p.text_editing.appearance.font.antialiasing = v))
+                .child(check_box("Smoothing", |p| p.text_editing.appearance.font.smoothing, |p, v| p.text_editing.appearance.font.smoothing = v))),
             row("Line Spacing:", number("Line spacing", NumberFieldOptions::new().range(1.0, 3.0).step(0.05), |p| p.text_editing.appearance.line_height, |p, v| p.text_editing.appearance.line_height = v)),
         ]),
         section("Appearance", vec![
@@ -701,17 +739,22 @@ fn text_appearance() -> AnyElement {
                 opt(InvisiblesMode::Selection, "In selected text"),
                 opt(InvisiblesMode::SelectionAndNonconformingIndentation, "In selected text and nonconforming indentation"),
             ], |p| p.text_editing.appearance.invisibles.mode, |p, v| p.text_editing.appearance.invisibles.mode = v)),
+            row("Characters:", view().w(px(180.0)).child(text_pref("Invisible characters", "\\t \\n\\r", TextFieldOptions::new().mono(true),
+                |p| p.text_editing.appearance.invisibles.characters.clone(), |p, v| p.text_editing.appearance.invisibles.characters = v))),
         ]),
         section("Insertion Point", vec![
-            row("Insertion Point:", choice("Insertion Point", vec![
-                opt(InsertionPointStyle::Bar, "Bar"),
-                // The editor draws a bar caret only (DESIGN.md G8).
-                Opt { value: InsertionPointStyle::Block, title: "Block", available: false },
-                Opt { value: InsertionPointStyle::Underline, title: "Underline", available: false },
-            ], |p| p.text_editing.appearance.insertion_point.style, |p, v| p.text_editing.appearance.insertion_point.style = v)),
+            row("Style:", choice("Insertion Point", insertion_styles(),
+                |p| p.text_editing.appearance.insertion_point.style, |p, v| p.text_editing.appearance.insertion_point.style = v)),
             check("Blink the insertion point", |p| p.text_editing.appearance.insertion_point.blink, |p, v| p.text_editing.appearance.insertion_point.blink = v),
             check("Animate the blink", |p| p.text_editing.appearance.insertion_point.animate, |p, v| p.text_editing.appearance.insertion_point.animate = v),
             check("Show the insertion point over selected text", |p| p.text_editing.appearance.insertion_point.visible_with_selection, |p, v| p.text_editing.appearance.insertion_point.visible_with_selection = v),
+        ]),
+        section("Alternate Insertion Point", vec![
+            row("Style:", choice("Alternate Insertion Point", insertion_styles(),
+                |p| p.text_editing.appearance.alternate_insertion_point.style, |p, v| p.text_editing.appearance.alternate_insertion_point.style = v)),
+            check("Blink the alternate insertion point", |p| p.text_editing.appearance.alternate_insertion_point.blink, |p, v| p.text_editing.appearance.alternate_insertion_point.blink = v),
+            check("Animate the alternate blink", |p| p.text_editing.appearance.alternate_insertion_point.animate, |p, v| p.text_editing.appearance.alternate_insertion_point.animate = v),
+            check("Show the alternate insertion point over selected text", |p| p.text_editing.appearance.alternate_insertion_point.visible_with_selection, |p, v| p.text_editing.appearance.alternate_insertion_point.visible_with_selection = v),
         ]),
     ])
 }
@@ -753,6 +796,14 @@ fn text_behavior() -> AnyElement {
                 .child(pair("'", |p| p.text_editing.behavior.character_pairs.close_single_quote, |p, v| p.text_editing.behavior.character_pairs.close_single_quote = v))
                 .child(pair("`", |p| p.text_editing.behavior.character_pairs.close_backtick, |p, v| p.text_editing.behavior.character_pairs.close_backtick = v))),
             check("Jump past the ending character when its key is pressed", |p| p.text_editing.behavior.character_pairs.jump_past_enabled, |p, v| p.text_editing.behavior.character_pairs.jump_past_enabled = v),
+            row("Jump Past:", view().flex_row().items_center().gap_1()
+                .child(pair("}", |p| p.text_editing.behavior.character_pairs.jump_past_curly_brackets, |p, v| p.text_editing.behavior.character_pairs.jump_past_curly_brackets = v))
+                .child(pair(")", |p| p.text_editing.behavior.character_pairs.jump_past_parens, |p, v| p.text_editing.behavior.character_pairs.jump_past_parens = v))
+                .child(pair("]", |p| p.text_editing.behavior.character_pairs.jump_past_square_brackets, |p, v| p.text_editing.behavior.character_pairs.jump_past_square_brackets = v))
+                .child(pair(">", |p| p.text_editing.behavior.character_pairs.jump_past_greater_than, |p, v| p.text_editing.behavior.character_pairs.jump_past_greater_than = v))
+                .child(pair("\"", |p| p.text_editing.behavior.character_pairs.jump_past_double_quote, |p, v| p.text_editing.behavior.character_pairs.jump_past_double_quote = v))
+                .child(pair("'", |p| p.text_editing.behavior.character_pairs.jump_past_single_quote, |p, v| p.text_editing.behavior.character_pairs.jump_past_single_quote = v))
+                .child(pair("`", |p| p.text_editing.behavior.character_pairs.jump_past_backtick, |p, v| p.text_editing.behavior.character_pairs.jump_past_backtick = v))),
             check("Automatically highlight balancing characters", |p| p.text_editing.behavior.character_pairs.highlight_closing_brackets, |p, v| p.text_editing.behavior.character_pairs.highlight_closing_brackets = v),
         ]),
         section("Selection", vec![
@@ -761,6 +812,15 @@ fn text_behavior() -> AnyElement {
         ]),
         section("Code Tokenizers", vec![
             check("Enable code tokenizers", |p| p.text_editing.behavior.tokenizers.enabled, |p, v| p.text_editing.behavior.tokenizers.enabled = v),
+            row("Languages:", view().flex_col().gap_1p5()
+                .child(view().flex_row().items_center().gap_4()
+                    .child(check_box("Clang", |p| p.text_editing.behavior.tokenizers.clang, |p, v| p.text_editing.behavior.tokenizers.clang = v))
+                    .child(check_box("PHP", |p| p.text_editing.behavior.tokenizers.php, |p, v| p.text_editing.behavior.tokenizers.php = v))
+                    .child(check_box("Python", |p| p.text_editing.behavior.tokenizers.python, |p, v| p.text_editing.behavior.tokenizers.python = v)))
+                .child(view().flex_row().items_center().gap_4()
+                    .child(check_box("Shell", |p| p.text_editing.behavior.tokenizers.shell, |p, v| p.text_editing.behavior.tokenizers.shell = v))
+                    .child(check_box("Swift", |p| p.text_editing.behavior.tokenizers.swift, |p, v| p.text_editing.behavior.tokenizers.swift = v))
+                    .child(check_box("Generic Source Code", |p| p.text_editing.behavior.tokenizers.generic_source, |p, v| p.text_editing.behavior.tokenizers.generic_source = v)))),
             check("Underline tokens at the insertion point", |p| p.text_editing.behavior.tokenizers.highlight_tokens, |p, v| p.text_editing.behavior.tokenizers.highlight_tokens = v),
         ]),
         section("Spelling", vec![
@@ -823,11 +883,36 @@ fn text_diagnostics() -> AnyElement {
     ])
 }
 
+#[derive(Clone, Copy, Default, PartialEq)]
+struct AutoPathRevision(u64);
+
+fn refresh_auto_path() {
+    spawn(async {
+        let _ = blocking(scratch_runner::refresh_automatic_path).await;
+        global::<AutoPathRevision>().update(|r| r.0 += 1);
+    });
+}
+
 fn shell() -> Vec<AnyElement> {
     let automatic = bound(|p| p.shell.automatically_determine_path);
+    if automatic.get_untracked() && scratch_runner::cached_automatic_path().is_none() {
+        refresh_auto_path();
+    }
     vec![
         section("PATH", vec![
             check("Automatically determine PATH environment variable", |p| p.shell.automatically_determine_path, |p, v| p.shell.automatically_determine_path = v),
+            when(move || automatic.get(), || {
+                row("Resolved PATH:", view().flex_col().gap_2()
+                    .child(view().w_full().px_2().py(px(6.0)).rounded(px(tokens::radius()))
+                        .border_1().border_color(tokens::border).bg(tokens::muted)
+                        .child(type_code_caption().apply(text(move || {
+                            global::<AutoPathRevision>().get();
+                            scratch_runner::cached_automatic_path().unwrap_or_else(|| "Determining PATH…".to_owned())
+                        }).number_of_lines(3).text_color(tokens::muted_foreground))))
+                    .child(view().flex_row().justify_end()
+                        .child(button("Refresh PATH", ButtonOptions::new().size(ControlSize::Sm), refresh_auto_path)))
+                    .into_element())
+            }).into_element(),
             // The kit's field takes `disabled` once: made again when it flips.
             row("Custom PATH:", dynamic(move || {
                 let disabled = automatic.get();
@@ -958,8 +1043,8 @@ fn themes() -> impl IntoElement {
         selected.set(SelectedTheme(name));
     }
     let strip = IconButtonOptions::new().variant(IconButtonVariant::Filled).size(ControlSize::Sm);
-    view().flex_1().min_h(px(0.0)).flex_row().gap_3().px_4().pb_4().pt_3()
-        .child(view().w(px(200.0)).min_h(px(0.0)).gap_2()
+    view().flex_1().min_h(px(0.0)).flex_row().gap_4().px_4().pb_4().pt_3()
+        .child(view().w(px(330.0)).min_h(px(0.0)).flex_col().gap_2()
             .child(view().flex_1().min_h(px(0.0)).rounded(px(tokens::radius_lg())).border_1().border_color(tokens::border).bg(tokens::card)
                 .child(scroll().flex_1().min_h(px(0.0)).child(view().label("Color Themes").child(
                     tabs().flex_col().gap(px(1.0)).p_1()
@@ -1002,7 +1087,7 @@ fn themes() -> impl IntoElement {
                 }))
                 .child(icon_button(IconName::EllipsisCircle, "More theme actions…", strip, || {
                     spawn(async move { let _ = popup_menu(theme_action_items()).await; });
-                }))
+                })))
             .child(view().flex_col().gap_1()
                 .child(radio("Use the chosen theme for all appearances", move || settings().with(|p| !p.themes.use_separate_color_themes), false, || {
                     write(|p| p.themes.use_separate_color_themes = false);
@@ -1022,11 +1107,11 @@ fn themes() -> impl IntoElement {
                     }).into_element()
                 }))
                 .child(check_box("Match window appearance to theme", |p| p.themes.match_appearance_to_theme, |p, v| p.themes.match_appearance_to_theme = v))))
-        .child(view().flex_1().min_w(px(0.0)).child(dynamic(move || {
+        .child(view().flex_1().min_w(px(0.0)).min_h(px(0.0)).flex_col().child(dynamic(move || {
             let name = global::<SelectedTheme>().with(|s| s.0.clone());
             global::<super::theme::ThemesRevision>().get();
             untracked(|| theme_editor(name)).into_element()
-        }))))
+        })))
 }
 
 /// Creates a user theme, applies it per the appearance radios, selects it.
@@ -1228,35 +1313,35 @@ fn theme_editor(name: String) -> View {
     let assign_id = name.clone();
     view().flex_1().min_h(px(0.0)).gap_3()
         .child(view().gap_2()
-            .child(dynamic({
-                let name = name.clone();
-                move || {
-                    if global::<RenamingTheme>().get().0 {
-                        let value = name.clone();
-                        untracked(|| view().flex_row().items_center().gap_2()
-                            .child(type_body().apply(text("Name:")))
-                            .child(view().w(px(220.0)).child(field("theme-rename".to_owned(), "Theme name", value,
-                                TextFieldOptions::new().accessibility_label("Theme name"), move |next| {
-                                    let next = next.trim().to_owned();
-                                    global::<RenamingTheme>().set(RenamingTheme(false));
-                                    if next.is_empty() { return; }
-                                    let old = global::<SelectedTheme>().get_untracked().0;
-                                    match super::theme::mutate_library(|library| library.rename(&old, &next).map(|arc| arc.name.clone())) {
-                                        Ok(new_name) => global::<SelectedTheme>().set(SelectedTheme(new_name)),
-                                        Err(error) => state::notice(format!("Not renamed: {error}")),
-                                    }
-                                }))).into_element()).into_element()
-                    } else {
-                        let name = name.clone();
-                        untracked(|| section_header(name, SectionHeaderVariant::Form, SectionHeaderOptions::new()).into_element()).into_element()
+            .child(view().flex_row().items_center().justify_between().gap_3()
+                .child(view().flex_1().min_w(px(0.0)).child(dynamic({
+                    let name = name.clone();
+                    move || {
+                        if global::<RenamingTheme>().get().0 {
+                            let value = name.clone();
+                            untracked(|| view().flex_row().items_center().gap_2()
+                                .child(type_body().apply(text("Name:")))
+                                .child(view().w(px(220.0)).child(field("theme-rename".to_owned(), "Theme name", value,
+                                    TextFieldOptions::new().accessibility_label("Theme name"), move |next| {
+                                        let next = next.trim().to_owned();
+                                        global::<RenamingTheme>().set(RenamingTheme(false));
+                                        if next.is_empty() { return; }
+                                        let old = global::<SelectedTheme>().get_untracked().0;
+                                        match super::theme::mutate_library(|library| library.rename(&old, &next).map(|arc| arc.name.clone())) {
+                                            Ok(new_name) => global::<SelectedTheme>().set(SelectedTheme(new_name)),
+                                            Err(error) => state::notice(format!("Not renamed: {error}")),
+                                        }
+                                    }))).into_element()).into_element()
+                        } else {
+                            let name = name.clone();
+                            untracked(|| type_subhead().semibold().apply(text(name)).text_color(tokens::foreground).into_element()).into_element()
+                        }
                     }
-                }
-            }))
-            .child(view().flex_row().items_center().justify_between().gap_4()
-                .child(view().flex_row().gap_3().children(wells))
+                })))
                 .child(button(if separate { format!("Apply to {slot}") } else { "Apply".to_owned() }, ButtonOptions::new().size(ControlSize::Sm), move || {
                     apply_theme(&assign_id);
-                }))))
+                })))
+            .child(view().flex_row().items_center().gap_3().children(wells)))
         .child(view().flex_1().min_h(px(0.0)).rounded(px(tokens::radius_lg())).border_1().border_color(tokens::border).bg(tokens::card)
             .child(scroll().flex_1().min_h(px(0.0)).child(view().flex_col().p_1().children(rows))))
         .child(view().flex_row().items_center().gap_2()
@@ -1265,15 +1350,15 @@ fn theme_editor(name: String) -> View {
                 move || mutate_theme(&name, |theme| theme.items.push(scratch_theme::ThemeItem::new(
                     "New Element", "comment", theme.global.foreground.unwrap_or_default(), None)))
             }))
-            .child(type_caption().apply(text("Scope:")).child(field(format!("theme-scope:{name}"), "source.python comment", scope,
+            .child(type_caption().apply(text("Scope:")))
+            .child(view().flex_1().min_w(px(140.0)).child(field(format!("theme-scope:{name}"), "source.python comment", scope,
                 TextFieldOptions::new().mono(true).accessibility_label("Scope selector"), move |next| {
                     let index = item_index;
                     mutate_theme(&scope_id, move |theme| if let Some(item) = theme.items.get_mut(index) { item.scope = next.trim().to_owned(); })
                 })))
-            .child(type_caption().apply(text("Use \u{2303}\u{2318}P in the editor to show the active scope").text_color(tokens::muted_foreground)))
-            .child(view().flex_1())
             .child(checkbox("Show all", global::<ShowAllThemeItems>().get_untracked().0, CheckboxOptions::new(),
                 |on| global::<ShowAllThemeItems>().set(ShowAllThemeItems(on)))))
+        .child(type_caption().apply(text("Use \u{2303}\u{2318}P in the editor to show the active scope")).text_color(tokens::muted_foreground))
 }
 
 /// A theme's `color_well` `on_change`, saving `rgba` into its global settings.
@@ -1427,6 +1512,52 @@ struct SelectedBinding(String);
 #[derive(Clone, Default, PartialEq)]
 struct Recording(String);
 
+fn disarm_recording() {
+    global::<Recording>().set(Recording(String::new()));
+    super::native::set_key_recording(false);
+}
+
+fn arm_recording(slot_key: String, apply: impl FnOnce(Option<scratch_commands::Stroke>) + 'static) {
+    if global::<Recording>().with_untracked(|r| r.0 == slot_key) {
+        disarm_recording();
+        return;
+    }
+    global::<Recording>().set(Recording(slot_key.clone()));
+    super::native::set_key_recording(true);
+    let mut apply = Some(apply);
+    spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(35)).await;
+            if !global::<Recording>().with_untracked(|r| r.0 == slot_key) {
+                break;
+            }
+            match super::native::take_recorded_key() {
+                Some(super::native::RecordedKey::Cancel) => {
+                    disarm_recording();
+                    break;
+                }
+                Some(super::native::RecordedKey::Clear) => {
+                    if let Some(f) = apply.take() {
+                        f(None);
+                    }
+                    disarm_recording();
+                    break;
+                }
+                Some(super::native::RecordedKey::Stroke(s)) => {
+                    if let Ok(stroke) = scratch_commands::Stroke::parse_nsh(&s)
+                        && let Some(f) = apply.take()
+                    {
+                        f(Some(stroke));
+                    }
+                    disarm_recording();
+                    break;
+                }
+                None => {}
+            }
+        }
+    });
+}
+
 /// The bottom bar's filter text.
 #[derive(Clone, Default, PartialEq)]
 struct BindingFilter(String);
@@ -1451,7 +1582,10 @@ fn keyboard() -> impl IntoElement {
         .child(segmented("Key bindings category",
             ["Menu Items", "Commands", "Compound Commands", "Global Compound Commands"].into_iter().map(Segment::new),
             move || tab.get().0,
-            |index| global::<BindingsTab>().set(BindingsTab(index)),
+            |index| {
+                disarm_recording();
+                global::<BindingsTab>().set(BindingsTab(index));
+            },
             SegmentedOptions::new().size(ControlSize::Sm)))
         .child(view().flex_1().min_h(px(0.0)).flex_row().gap_3()
             .child(bindings_table(rows))
@@ -1579,7 +1713,10 @@ fn binding_row(row: BindingRow) -> AnyElement {
     let armed = { let key = row.key.clone(); computed(move || global::<Recording>().with(|r| r.0 == key)) };
     let pick = {
         let key = row.key.clone();
-        move || global::<SelectedBinding>().set(SelectedBinding(key.clone()))
+        move || {
+            disarm_recording();
+            global::<SelectedBinding>().set(SelectedBinding(key.clone()));
+        }
     };
     let toggle = {
         let row = row.clone();
@@ -1592,17 +1729,40 @@ fn binding_row(row: BindingRow) -> AnyElement {
         }
     };
     let (title_color, subtitle) = (row.title.clone(), row.subtitle.clone());
+    let rec_key = row.key.clone();
+    let rec_bound = row.bound;
+    let rec_id = row.binding.as_ref().map(|b| b.identifier.clone());
+    let rec_global = row.global;
     let capsule = view().w(px(112.0)).h(px(20.0)).px_2().flex_row().items_center().justify_center()
         .rounded(px(tokens::radius())).border_1()
         .border_color(move || if armed.get() { tokens::ring() } else { tokens::input() })
-        .bg(move || if armed.get() { tokens::muted() } else { tokens::card() })
+        .bg(move || if armed.get() { tokens::accent() } else { tokens::card() })
+        .role(AccessibilityRole::Button)
+        .cursor_pointer()
         .label(format!("Shortcut for {}", row.title))
+        .on_press(move || {
+            let slot = rec_key.clone();
+            let row_sel = rec_key.clone();
+            global::<SelectedBinding>().set(SelectedBinding(row_sel));
+            let rec_id = rec_id.clone();
+            arm_recording(slot, move |stroke| {
+                let shortcut = stroke.map(scratch_commands::Shortcut::single);
+                if let Some(bound) = rec_bound {
+                    super::bindings::record(bound, shortcut);
+                } else if let Some(identifier) = rec_id {
+                    super::bindings::mutate_binding(&identifier, rec_global, move |b| {
+                        b.set_shortcut(shortcut.as_ref());
+                        b.enabled = true;
+                    });
+                }
+            });
+        })
         .child({
             let keys = row.keys.clone();
             text(move || if armed.get() { "Type shortcut…".to_owned() } else if keys.is_empty() { "None".to_owned() } else { keys.clone() })
                 .text_size(px(tokens::type_caption()))
                 .text_color(move || {
-                    if armed.get() { tokens::selection_foreground() }
+                    if armed.get() { tokens::primary() }
                     else if row.keys.is_empty() { tokens::muted_foreground() }
                     else { tokens::foreground() }
                 })
@@ -1811,7 +1971,10 @@ fn bottom_bar() -> impl IntoElement {
     view().flex_row().items_center().gap_2()
         .child(view().w(px(200.0)).child(field("binding-filter".to_owned(), "Filter", String::new(),
             TextFieldOptions::new().accessibility_label("Filter bindings"),
-            |next| global::<BindingFilter>().set(BindingFilter(next)))))
+            |next| {
+                disarm_recording();
+                global::<BindingFilter>().set(BindingFilter(next));
+            })))
         .child(icon_button(IconName::Plus, "Add a binding", strip, || {
             let items = vec![
                 MenuItem::new("New Command Binding").on_select(|| {
@@ -1863,9 +2026,19 @@ struct LanguageRow { id: String, name: String, modified: bool, enabled: bool }
 #[derive(Clone, Copy, Default, PartialEq)]
 struct LanguagesRevision(u64);
 
-/// Bumped by Reset, so the detail is made again with the restored values.
+/// Bumped by Reset or structural edits, so the detail is made again without interrupting typing.
 #[derive(Clone, Copy, Default, PartialEq)]
 struct LanguageReset(u64);
+
+fn notify_registry_changed() {
+    global::<LanguagesRevision>().update(|r| r.0 += 1);
+    global::<state::RegistryRevision>().update(|r| r.0 += 1);
+    state::publish();
+}
+
+fn bump_language_reset() {
+    global::<LanguageReset>().update(|r| r.0 += 1);
+}
 
 #[derive(Clone, Default, PartialEq)]
 struct SelectedLanguage(String);
@@ -1918,6 +2091,7 @@ fn languages() -> impl IntoElement {
                     let check_id = id.clone();
                     let is_selected = { let id = id.clone(); computed(move || selected.with(|s| s.0 == id)) };
                     list_tab(is_selected, move || {
+                        disarm_recording();
                         flush();
                         global::<LanguageMessage>().set(LanguageMessage(None));
                         global::<RenamingLanguage>().set(RenamingLanguage(false));
@@ -1978,7 +2152,7 @@ fn language_action_items() -> Vec<MenuItem> {
         MenuItem::separator(),
         MenuItem::new("Use Selected as Default").disabled(none || is_default).on_select(move || {
             match with_registry(|registry| registry.set_default_language(&id)) {
-                Ok(Ok(())) => global::<LanguagesRevision>().update(|r| r.0 += 1),
+                Ok(Ok(())) => notify_registry_changed(),
                 Ok(Err(error)) => state::notice(format!("{error}")),
                 Err(error) => state::notice(error),
             }
@@ -2001,8 +2175,8 @@ fn with_registry<R>(f: impl FnOnce(&mut scratch_language::LanguageRegistry) -> R
 fn registry_done(result: Result<Result<(), scratch_language::LanguageError>, String>) {
     match result {
         Ok(Ok(())) => {
-            global::<LanguagesRevision>().update(|r| r.0 += 1);
-            global::<LanguageReset>().update(|r| r.0 += 1);
+            notify_registry_changed();
+            bump_language_reset();
         }
         Ok(Err(error)) => state::notice(format!("{error}")),
         Err(error) => state::notice(error),
@@ -2020,8 +2194,8 @@ fn save_new_language(def: scratch_language::LanguageDef) {
     let name = def.name.clone();
     match with_registry(|registry| registry.save(def)) {
         Ok(Ok(())) => {
-            global::<LanguagesRevision>().update(|r| r.0 += 1);
-            global::<LanguageReset>().update(|r| r.0 += 1);
+            notify_registry_changed();
+            bump_language_reset();
             global::<SelectedLanguage>().set(SelectedLanguage(id));
             state::notice(format!("{name} was added."));
         }
@@ -2068,8 +2242,8 @@ fn confirm_delete_language(id: &str) {
 fn delete_language(id: &str) {
     match with_registry(|registry| registry.delete(id)) {
         Ok(Ok(())) => {
-            global::<LanguagesRevision>().update(|r| r.0 += 1);
-            global::<LanguageReset>().update(|r| r.0 += 1);
+            notify_registry_changed();
+            bump_language_reset();
             global::<SelectedLanguage>().set(SelectedLanguage(String::new()));
         }
         Ok(Err(error)) => state::notice(format!("Not deleted: {error}")),
@@ -2083,8 +2257,8 @@ fn duplicate_language(id: &str) {
     let name = unique_language_name(&base);
     match with_registry(|registry| registry.duplicate(id, &name)) {
         Ok(Ok(new_id)) => {
-            global::<LanguagesRevision>().update(|r| r.0 += 1);
-            global::<LanguageReset>().update(|r| r.0 += 1);
+            notify_registry_changed();
+            bump_language_reset();
             global::<SelectedLanguage>().set(SelectedLanguage(new_id));
         }
         Ok(Err(error)) => state::notice(format!("Not duplicated: {error}")),
@@ -2097,6 +2271,7 @@ fn rename_language(id: &str, next: &str) {
     let next = next.trim();
     if next.is_empty() { return; }
     mutate_language(id, move |def| def.name = next.to_owned());
+    bump_language_reset();
 }
 
 /// `Import…`: `.crLanguage` bundles / `Language.plist` / our `.toml` files.
@@ -2133,8 +2308,8 @@ fn import_language_path(path: &std::path::Path) {
     });
     match result {
         Ok(Ok(name)) => {
-            global::<LanguagesRevision>().update(|r| r.0 += 1);
-            global::<LanguageReset>().update(|r| r.0 += 1);
+            notify_registry_changed();
+            bump_language_reset();
             for warning in warnings { state::notice(format!("{name}: {warning}")); }
             global::<SelectedLanguage>().set(SelectedLanguage(String::new()));
         }
@@ -2224,7 +2399,6 @@ fn language_detail(id: String) -> View {
     let detail = {
         let id = id.clone();
         dynamic(move || {
-            global::<LanguagesRevision>().get();
             global::<LanguageReset>().get();
             match tab.get().0 {
                 1 => language_templates(&id),
@@ -2238,7 +2412,10 @@ fn language_detail(id: String) -> View {
         .child(view().flex_row().justify_center()
             .child(segmented("Language detail", ["Settings", "Templates", "Docs", "Diagnostics"].into_iter().map(Segment::new),
                 move || tab.get().0,
-                |index| global::<LanguageSubTab>().set(LanguageSubTab(index)),
+                |index| {
+                    disarm_recording();
+                    global::<LanguageSubTab>().set(LanguageSubTab(index));
+                },
                 SegmentedOptions::new())))
         .child(scroll().flex_1().min_h(px(0.0)).child(view().pb_2().child(detail)))
 }
@@ -2267,12 +2444,16 @@ fn mutate_language(id: &str, f: impl FnOnce(&mut scratch_language::LanguageDef))
     });
     match result {
         Ok(true) => {
-            global::<LanguagesRevision>().update(|r| r.0 += 1);
+            notify_registry_changed();
             global::<LanguageMessage>().set(LanguageMessage(None));
         }
         Ok(false) => {}
         Err(error) => global::<LanguageMessage>().set(LanguageMessage(Some(error))),
     }
+}
+
+fn cancel_pending_prefix(prefix: &str) {
+    PENDING.with_borrow_mut(|pending| pending.retain(|(key, _, _)| !key.starts_with(prefix)));
 }
 
 fn language_settings(id: &str) -> AnyElement {
@@ -2286,13 +2467,75 @@ fn language_settings(id: &str) -> AnyElement {
     };
     let default_command = pristine.as_ref().filter(|p| p.run.command != def.run.command)
         .map(|p| format!("Default: {}", if p.run.command.is_empty() { "none" } else { &p.run.command }));
-    let compile = if def.has_compile_step() { "Yes: a compile script runs first; its last output line is $compiler." } else { "No" };
+    let compile_mode_label = match &def.run.compile {
+        scratch_language::CompileSpec::None => "None",
+        scratch_language::CompileSpec::Steps(_) => "Built-in Steps",
+        scratch_language::CompileSpec::Shell(_) => "Custom Shell Script",
+    };
+    let compile_defer_prefix = format!("lang-compile-script:{id}");
+    let mut compile_items = vec![
+        MenuItem::new("None")
+            .checked(matches!(def.run.compile, scratch_language::CompileSpec::None))
+            .on_select({
+                let id = id.to_owned();
+                let prefix = compile_defer_prefix.clone();
+                move || {
+                    cancel_pending_prefix(&prefix);
+                    mutate_language(&id, |d| d.run.compile = scratch_language::CompileSpec::None);
+                    bump_language_reset();
+                }
+            }),
+    ];
+    let builtin_steps = match (&def.run.compile, pristine.as_ref().map(|p| &p.run.compile)) {
+        (scratch_language::CompileSpec::Steps(s), _) => Some(s.clone()),
+        (_, Some(scratch_language::CompileSpec::Steps(s))) => Some(s.clone()),
+        _ => None,
+    };
+    if let Some(steps) = builtin_steps {
+        compile_items.push(
+            MenuItem::new("Built-in Steps")
+                .checked(matches!(def.run.compile, scratch_language::CompileSpec::Steps(_)))
+                .on_select({
+                    let id = id.to_owned();
+                    let prefix = compile_defer_prefix.clone();
+                    move || {
+                        cancel_pending_prefix(&prefix);
+                        let steps = steps.clone();
+                        mutate_language(&id, move |d| d.run.compile = scratch_language::CompileSpec::Steps(steps));
+                        bump_language_reset();
+                    }
+                }),
+        );
+    }
+    let default_shell = match (&def.run.compile, pristine.as_ref().map(|p| &p.run.compile)) {
+        (scratch_language::CompileSpec::Shell(s), _) => s.script.clone(),
+        (_, Some(scratch_language::CompileSpec::Shell(s))) => s.script.clone(),
+        _ => "#!/bin/bash\n# Print the runnable command ($compiler) as the last line of stdout.\n".to_owned(),
+    };
+    compile_items.push(
+        MenuItem::new("Custom Shell Script")
+            .checked(matches!(def.run.compile, scratch_language::CompileSpec::Shell(_)))
+            .on_select({
+                let id = id.to_owned();
+                let script = default_shell.clone();
+                move || {
+                    cancel_pending_prefix(&compile_defer_prefix);
+                    let script = script.clone();
+                    mutate_language(&id, move |d| {
+                        if !matches!(d.run.compile, scratch_language::CompileSpec::Shell(_)) {
+                            d.run.compile = scratch_language::CompileSpec::Shell(scratch_language::ShellSpec { script });
+                        }
+                    });
+                    bump_language_reset();
+                }
+            }),
+    );
     let command_caption = SharedString::from(default_command.map_or_else(
         || "$filename is the source file; $compiler is the compile script's output.".to_owned(),
         |default| format!("$filename is the source file; $compiler is the compile script's output. {default}.")));
     let reset_id = id.to_owned();
     let debugger_label = debugger_name(def.debugger.as_deref()).to_owned();
-    let rows: Vec<AnyElement> = vec![
+    let mut rows: Vec<AnyElement> = vec![
         when(move || global::<RenamingLanguage>().get().0, {
             let (id, name) = (id.to_owned(), def.name.clone());
             move || form_row("Name:", view().w(px(220.0)).child(field(format!("lang-rename:{id}"), "Name", name.clone(),
@@ -2302,7 +2545,35 @@ fn language_settings(id: &str) -> AnyElement {
                 })),
                 FormRowOptions::new().label_width(120.0)).into_element()
         }).into_element(),
-        form_row("Compile Script:", type_body().apply(text(compile)), FormRowOptions::new().label_width(120.0)).into_element(),
+        form_row("Compile Mode:", view().w(px(190.0)).child(popup_button("Choose compile mode", compile_mode_label,
+            compile_items, PopupButtonOptions::new(), |_open: bool| {})),
+            FormRowOptions::new().label_width(120.0).caption("When enabled, compiles before running and emits $compiler on the last stdout line.")).into_element(),
+    ];
+    if let scratch_language::CompileSpec::Shell(shell) = &def.run.compile {
+        let lang_for_compile = id.to_owned();
+        let initial_script = shell.script.clone();
+        let compile_defer_key = format!("lang-compile-script:{id}");
+        rows.push(form_row("Compile Script:", code_field(
+            move || Some(SharedString::from(language_def(&lang_for_compile)
+                .and_then(|d| match d.run.compile {
+                    scratch_language::CompileSpec::Shell(s) => Some(s.script),
+                    _ => None,
+                })
+                .unwrap_or_else(|| initial_script.clone()))),
+            {
+                let id = id.to_owned();
+                move |next: &SharedString| {
+                    let script = next.to_string();
+                    let id = id.clone();
+                    defer(compile_defer_key.clone(), move || mutate_language(&id, move |d| {
+                        d.run.compile = scratch_language::CompileSpec::Shell(scratch_language::ShellSpec { script: script.clone() });
+                    }));
+                }
+            },
+            CodeFieldOptions::new("shell").min_rows(4).max_rows(12).accessibility_label("Compile shell script"),
+        ).into_element(), FormRowOptions::new().label_width(120.0)).into_element());
+    }
+    rows.extend([
         form_row("Compile Flags:", view().w(px(220.0)).child(field(format!("lang-flags:{id}"), "-Wall -O2", def.run.flags.clone(),
             TextFieldOptions::new().mono(true).accessibility_label("Compile flags"), {
                 let id = id.to_owned();
@@ -2338,7 +2609,7 @@ fn language_settings(id: &str) -> AnyElement {
             let id = reset_id.clone();
             untracked(|| button("Reset to Default", ButtonOptions::new().size(ControlSize::Sm).disabled(!enabled), move || reset_language(&id))).into_element()
         }), FormRowOptions::new().label_width(120.0)).into_element(),
-    ];
+    ]);
     view().gap_2()
         .child(section_header(def.name.clone(), SectionHeaderVariant::Form, SectionHeaderOptions::new()))
         .child(card(rows))
@@ -2350,27 +2621,35 @@ fn debugger_name(id: Option<&str>) -> &'static str {
     match id {
         None => "None",
         Some("lldb") => "LLDB",
+        Some("gdb") => "GDB",
         Some("pdb") => "Python (pdb)",
         Some("node") => "Node.js (inspect)",
         Some("jdb") => "Java (jdb)",
         Some("bashdb") => "Bash (bashdb)",
         Some("perl") => "Perl (perl -d)",
         Some("phpdbg") => "PHP (phpdbg)",
+        Some("xdebug") => "PHP (Xdebug)",
         Some(_) => "Custom",
     }
 }
 
 /// The Debugger popup's items: None plus the built-in adapters.
 fn debugger_items(id: &str, current: Option<String>) -> Vec<MenuItem> {
-    const ADAPTERS: [&str; 7] = ["lldb", "pdb", "node", "jdb", "bashdb", "perl", "phpdbg"];
+    const ADAPTERS: [&str; 9] = ["lldb", "gdb", "pdb", "node", "jdb", "bashdb", "perl", "phpdbg", "xdebug"];
     let mut items = vec![MenuItem::new("None").checked(current.is_none()).on_select({
         let id = id.to_owned();
-        move || mutate_language(&id, |def| def.debugger = None)
+        move || {
+            mutate_language(&id, |def| def.debugger = None);
+            bump_language_reset();
+        }
     })];
     for adapter in ADAPTERS {
         items.push(MenuItem::new(debugger_name(Some(adapter))).checked(current.as_deref() == Some(adapter)).on_select({
             let id = id.to_owned();
-            move || mutate_language(&id, move |def| def.debugger = Some(adapter.to_owned()))
+            move || {
+                mutate_language(&id, move |def| def.debugger = Some(adapter.to_owned()));
+                bump_language_reset();
+            }
         }));
     }
     items
@@ -2384,7 +2663,13 @@ fn encoding_title(code: i64) -> String {
 /// The "I/O Encoding" popup (CodeRunner lists every NSStringEncoding; the
 /// common ones cover the field's purpose).
 fn encoding_items(id: &str, current: i64) -> Vec<MenuItem> {
-    let set = |code: i64| { let id = id.to_owned(); move || mutate_language(&id, move |d| d.output_encoding = code) };
+    let set = |code: i64| {
+        let id = id.to_owned();
+        move || {
+            mutate_language(&id, move |d| d.output_encoding = code);
+            bump_language_reset();
+        }
+    };
     let mut items = vec![MenuItem::new("Automatic (UTF-8)").checked(current == 0).on_select(set(0))];
     for (name, code) in [("UTF-8", 4), ("US-ASCII", 1), ("UTF-16", 10), ("ISO-8859-1", 5), ("Windows-1252", 12), ("Macintosh", 30)] {
         items.push(MenuItem::new(name).checked(current == code).on_select(set(code)));
@@ -2408,10 +2693,13 @@ fn syntax_items(id: &str, current: &str) -> Vec<MenuItem> {
         let id = id.to_owned();
         MenuItem::new(if syntax == "text.plain" { "Plain Text".to_owned() } else { name })
             .checked(syntax == current)
-            .on_select(move || mutate_language(&id, {
-                let syntax = syntax.clone();
-                move |d| d.editor_syntax = syntax
-            }))
+            .on_select(move || {
+                mutate_language(&id, {
+                    let syntax = syntax.clone();
+                    move |d| d.editor_syntax = syntax
+                });
+                bump_language_reset();
+            })
     }).collect::<Vec<_>>()
 }
 
@@ -2426,29 +2714,44 @@ fn console_items(id: &str, spec: &scratch_language::ConsoleSpec) -> Vec<MenuItem
     ].into_iter().map(|(kind, label)| {
         let id = id.to_owned();
         MenuItem::new(label).checked(spec.kind == kind)
-            .on_select(move || mutate_language(&id, move |d| d.console.kind = kind))
+            .on_select(move || {
+                mutate_language(&id, move |d| d.console.kind = kind);
+                bump_language_reset();
+            })
     }).collect();
     items.push(MenuItem::separator());
     items.push(MenuItem::new("Same as Default").checked(spec.position.is_none()).on_select({
         let id = id.to_owned();
-        move || mutate_language(&id, move |d| d.console.position = None)
+        move || {
+            mutate_language(&id, move |d| d.console.position = None);
+            bump_language_reset();
+        }
     }));
     for (position, label) in [(scratch_language::ConsolePosition::Bottom, "Console Position: Bottom"),
         (scratch_language::ConsolePosition::Right, "Console Position: Right")] {
         let id = id.to_owned();
         items.push(MenuItem::new(label).checked(spec.position == Some(position))
-            .on_select(move || mutate_language(&id, move |d| d.console.position = Some(position))));
+            .on_select(move || {
+                mutate_language(&id, move |d| d.console.position = Some(position));
+                bump_language_reset();
+            }));
     }
     items.push(MenuItem::separator());
     items.push(MenuItem::new("Allow Toggling of Console Types").checked(spec.switchable).on_select({
         let id = id.to_owned();
         let on = !spec.switchable;
-        move || mutate_language(&id, move |d| d.console.switchable = on)
+        move || {
+            mutate_language(&id, move |d| d.console.switchable = on);
+            bump_language_reset();
+        }
     }));
     items.push(MenuItem::new("Live Updating").checked(spec.live).on_select({
         let id = id.to_owned();
         let on = !spec.live;
-        move || mutate_language(&id, move |d| d.console.live = on)
+        move || {
+            mutate_language(&id, move |d| d.console.live = on);
+            bump_language_reset();
+        }
     }));
     items
 }
@@ -2465,7 +2768,10 @@ fn indent_title(def: &scratch_language::LanguageDef) -> String {
 fn indent_items(id: &str, def: &scratch_language::LanguageDef) -> Vec<MenuItem> {
     let mut items = vec![MenuItem::new("Default").checked(!def.custom_tab_mode).on_select({
         let id = id.to_owned();
-        move || mutate_language(&id, move |d| d.custom_tab_mode = false)
+        move || {
+            mutate_language(&id, move |d| d.custom_tab_mode = false);
+            bump_language_reset();
+        }
     })];
     for soft in [false, true] {
         items.push(MenuItem::separator());
@@ -2474,7 +2780,10 @@ fn indent_items(id: &str, def: &scratch_language::LanguageDef) -> Vec<MenuItem> 
             let label = if soft { format!("{width} spaces") } else { format!("Tabs, {width} wide") };
             let id = id.to_owned();
             items.push(MenuItem::new(label).checked(checked).on_select(
-                move || mutate_language(&id, move |d| { d.custom_tab_mode = true; d.soft_tabs = soft; d.tab_width = width; })));
+                move || {
+                    mutate_language(&id, move |d| { d.custom_tab_mode = true; d.soft_tabs = soft; d.tab_width = width; });
+                    bump_language_reset();
+                }));
         }
     }
     items
@@ -2496,6 +2805,7 @@ fn language_templates(id: &str) -> AnyElement {
             .child(view().flex_row().items_center().gap_2()
                 .child(radio("", is_selected, false, move || {
                     global::<SelectedTemplate>().set(SelectedTemplate(index));
+                    bump_language_reset();
                 }))
                 .child(view().flex_1().min_w(px(0.0)).child(field(format!("tpl-name:{id}:{index}"), "Name", template.name.clone(),
                     TextFieldOptions::new().accessibility_label("Template name"), move |next| {
@@ -2506,7 +2816,8 @@ fn language_templates(id: &str) -> AnyElement {
                         mutate_language(&rextend, move |def| if let Some(t) = def.templates.get_mut(index) { t.extension = next.trim().trim_start_matches('.').to_owned(); })
                     })))
                 .child(icon_button(IconName::Minus, "Delete the template", strip, move || {
-                    mutate_language(&removed, move |def| { def.templates.remove(index); })
+                    mutate_language(&removed, move |def| { def.templates.remove(index); });
+                    bump_language_reset();
                 })))
             .child(view().flex_row().items_center().gap_3().pl(px(24.0))
                 .child(checkbox("Default", template.default, CheckboxOptions::new(), move |on| {
@@ -2530,10 +2841,13 @@ fn language_templates(id: &str) -> AnyElement {
             .child(view().flex_row().items_center().gap_2()
                 .child(icon_button(IconName::Plus, "Create a new template", strip, {
                     let id = id.to_owned();
-                    move || mutate_language(&id, |def| def.templates.push(scratch_language::TemplateDef {
-                        name: "New Template".to_owned(), extension: def.extensions.first().cloned().unwrap_or_default(),
-                        text: String::new(), default: false, name_on_creation: false,
-                    }))
+                    move || {
+                        mutate_language(&id, |def| def.templates.push(scratch_language::TemplateDef {
+                            name: "New Template".to_owned(), extension: def.extensions.first().cloned().unwrap_or_default(),
+                            text: String::new(), default: false, name_on_creation: false,
+                        }));
+                        bump_language_reset();
+                    }
                 }))
                 .child(type_caption().apply(text(format!("{} template(s)", count)).text_color(tokens::muted_foreground)))))
         .child(type_caption().apply(text("Use <##> to represent text insertion point.").text_color(tokens::muted_foreground)))
@@ -2596,6 +2910,7 @@ fn language_docs(id: &str) -> AnyElement {
                         .show().await;
                     if let Ok(response) = response && response.action.as_deref() == Some("delete") {
                         mutate_language(&lang, move |def| { def.docs.remove(index); });
+                        bump_language_reset();
                     }
                 });
             }));
@@ -2647,10 +2962,13 @@ fn language_docs(id: &str) -> AnyElement {
         .child(view().flex_row().items_center().gap_2()
             .child(icon_button(IconName::Plus, "Add a documentation resource", strip, {
                 let id = id.to_owned();
-                move || mutate_language(&id, |def| def.docs.push(scratch_language::DocSource {
-                    name: "Docs".to_owned(), kind: scratch_language::DocType::Search,
-                    url: "https://www.google.com/search?q={query}".to_owned(), post: None, css: None, js: None, enabled: true, scope: None,
-                }))
+                move || {
+                    mutate_language(&id, |def| def.docs.push(scratch_language::DocSource {
+                        name: "Docs".to_owned(), kind: scratch_language::DocType::Search,
+                        url: "https://www.google.com/search?q={query}".to_owned(), post: None, css: None, js: None, enabled: true, scope: None,
+                    }));
+                    bump_language_reset();
+                }
             }))
             .child(type_caption().apply(text(format!("{count} resource(s)")).text_color(tokens::muted_foreground))))
         .child(card(rows))
@@ -2794,7 +3112,8 @@ fn doc_type_items(id: &str, index: usize, current: scratch_language::DocType) ->
     [DocType::Search, DocType::Bookmark, DocType::TextFind].into_iter().map(|kind| {
         let id = id.to_owned();
         MenuItem::new(doc_type_name(kind)).checked(kind == current).on_select(move || {
-            mutate_language(&id, move |def| if let Some(d) = def.docs.get_mut(index) { d.kind = kind; })
+            mutate_language(&id, move |def| if let Some(d) = def.docs.get_mut(index) { d.kind = kind; });
+            bump_language_reset();
         })
     }).collect()
 }
@@ -2833,6 +3152,7 @@ fn language_diagnostics(id: &str) -> AnyElement {
                     });
                     let index = language_def(&id).map(|def| def.diagnostics.len().saturating_sub(1)).unwrap_or(0);
                     global::<DiagExpanded>().update(|e| { e.0.insert(format!("{id}:{index}")); });
+                    bump_language_reset();
                 }
             }))
             .child(type_caption().apply(text(format!("{count} diagnostic(s)")).text_color(tokens::muted_foreground)))
@@ -2957,6 +3277,7 @@ fn diagnostic_row(lang: &str, index: usize, diagnostic: &scratch_language::Diagn
                                     .show().await;
                                 if let Ok(response) = response && response.action.as_deref() == Some("delete") {
                                     mutate_language(&lang, move |def| { def.diagnostics.remove(index); });
+                                    bump_language_reset();
                                 }
                             });
                         }),
@@ -2993,7 +3314,10 @@ fn diag_update_title(d: &scratch_language::DiagnosticDef) -> String {
 fn diag_update_items(lang: &str, index: usize, d: &scratch_language::DiagnosticDef) -> Vec<MenuItem> {
     let set = |lang: &str, index: usize, change: fn(&mut scratch_language::DiagnosticDef)| {
         let lang = lang.to_owned();
-        move || mutate_language(&lang, move |def| if let Some(d) = def.diagnostics.get_mut(index) { change(d); })
+        move || {
+            mutate_language(&lang, move |def| if let Some(d) = def.diagnostics.get_mut(index) { change(d); });
+            bump_language_reset();
+        }
     };
     let lang_owned = lang.to_owned();
     vec![
@@ -3024,7 +3348,8 @@ fn diagnostic_body(lang: &str, index: usize, d: &scratch_language::DiagnosticDef
     let kind_items = kinds.into_iter().map(|kind| {
         let lang = lang.to_owned();
         MenuItem::new(diag_kind_name(kind)).checked(kind == d.kind).on_select(move || {
-            mutate_language(&lang, move |def| if let Some(d) = def.diagnostics.get_mut(index) { d.kind = kind; })
+            mutate_language(&lang, move |def| if let Some(d) = def.diagnostics.get_mut(index) { d.kind = kind; });
+            bump_language_reset();
         })
     }).collect();
     rows.push(lab("Generate diagnostics using:", view().w(px(230.0))
@@ -3037,7 +3362,10 @@ fn diagnostic_body(lang: &str, index: usize, d: &scratch_language::DiagnosticDef
             rows.push(lab("", view().flex_row().items_center().gap_4()
                 .child(checkbox("Use custom compile flags:", d.options.custom_flags, CheckboxOptions::default(), {
                     let lang = lang.clone();
-                    move |on: bool| mutate_language(&lang, move |def| if let Some(d) = def.diagnostics.get_mut(index) { d.options.custom_flags = on; })
+                    move |on: bool| {
+                        mutate_language(&lang, move |def| if let Some(d) = def.diagnostics.get_mut(index) { d.options.custom_flags = on; });
+                        bump_language_reset();
+                    }
                 }))
                 .child(checkbox("Add to existing flags", d.options.add_to_existing, CheckboxOptions::default(), {
                     let lang = lang.clone();
@@ -3075,7 +3403,8 @@ fn diagnostic_body(lang: &str, index: usize, d: &scratch_language::DiagnosticDef
     let mode_items = modes.into_iter().map(|(mode, title)| {
         let lang = lang.to_owned();
         MenuItem::new(title).checked(mode == d.output_mode).on_select(move || {
-            mutate_language(&lang, move |def| if let Some(d) = def.diagnostics.get_mut(index) { d.output_mode = mode; })
+            mutate_language(&lang, move |def| if let Some(d) = def.diagnostics.get_mut(index) { d.output_mode = mode; });
+            bump_language_reset();
         })
     }).collect();
     let mode_title = modes.iter().find(|(mode, _)| *mode == d.output_mode).map(|(_, title)| *title).unwrap_or("Text (Unix/GCC style messages)");
@@ -3145,16 +3474,30 @@ fn diag_key_recorder(lang: &str, index: usize, d: &scratch_language::DiagnosticD
         .and_then(|text| scratch_commands::Stroke::parse_crbindings(text).ok())
         .map(|stroke| stroke.display())
         .unwrap_or_default();
+    let lang_owned = lang.to_owned();
     view().min_w(px(140.0)).h(px(22.0)).px_2().flex_row().items_center().justify_center()
         .rounded(px(tokens::radius())).border_1()
         .border_color(move || if armed.get() { tokens::ring() } else { tokens::input() })
-        .bg(move || if armed.get() { tokens::muted() } else { tokens::card() })
+        .bg(move || if armed.get() { tokens::accent() } else { tokens::card() })
+        .role(AccessibilityRole::Button)
+        .cursor_pointer()
         .label("Keyboard shortcut for the diagnostic")
+        .on_press(move || {
+            let slot = key.clone();
+            let lang_id = lang_owned.clone();
+            arm_recording(slot, move |stroke| {
+                mutate_language(&lang_id, move |def| {
+                    if let Some(diag) = def.diagnostics.get_mut(index) {
+                        diag.key_equivalent = stroke.map(|s| s.to_crbindings());
+                    }
+                });
+            });
+        })
         .child({
             let empty = label.is_empty();
             text(move || if armed.get() { "Type shortcut…".to_owned() } else if empty { "None".to_owned() } else { label.clone() })
                 .text_size(px(tokens::type_caption()))
-                .text_color(move || if armed.get() { tokens::selection_foreground() } else if empty { tokens::muted_foreground() } else { tokens::foreground() })
+                .text_color(move || if armed.get() { tokens::primary() } else if empty { tokens::muted_foreground() } else { tokens::foreground() })
         })
 }
 
@@ -3192,6 +3535,14 @@ fn diagnostic_test_run(lang: &str, index: usize) {
     }));
 }
 
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    let mut out: String = text.chars().take(max_chars).collect();
+    if text.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
+}
+
 /// Runs `diagnostic` on `text` (a worker thread) and reports the count and
 /// raw output in an alert.
 fn run_diagnostic_job(language: Arc<scratch_language::LanguageDef>, diagnostic: scratch_language::DiagnosticDef,
@@ -3205,8 +3556,8 @@ fn run_diagnostic_job(language: Arc<scratch_language::LanguageDef>, diagnostic: 
         let (title, description) = match result {
             Ok(Ok(output)) => {
                 let (ours, _theirs) = output.annotations(&text, file.as_deref());
-                let mut description = format!("Output from the diagnostic run:\n\n{}", output.raw_output.trim());
-                if description.len() > 1500 { description.truncate(1500); description.push('…'); }
+                let raw = format!("Output from the diagnostic run:\n\n{}", output.raw_output.trim());
+                let description = truncate_chars(&raw, 1500);
                 (format!("The diagnostics test run produced {} diagnostic(s).", ours.len()), description)
             }
             Ok(Err(error)) => ("The diagnostics test run failed.".to_owned(), error.to_string()),
@@ -3242,7 +3593,10 @@ fn commit_language_draft() {
     if id.is_empty() || (command.is_none() && extensions.is_none()) { return; }
     draft.set(LanguageDraft::default());
     let message = match edit_language(&id, command, extensions) {
-        Ok(changed) => { if changed { global::<LanguagesRevision>().update(|r| r.0 += 1); } None }
+        Ok(changed) => {
+            if changed { notify_registry_changed(); }
+            None
+        }
         Err(error) => Some(error),
     };
     global::<LanguageMessage>().set(LanguageMessage(message));
@@ -3277,8 +3631,8 @@ fn reset_language(id: &str) {
         None => Some("The languages are still loading.".to_owned()),
     };
     global::<LanguageMessage>().set(LanguageMessage(message));
-    global::<LanguagesRevision>().update(|r| r.0 += 1);
-    global::<LanguageReset>().update(|r| r.0 += 1);
+    notify_registry_changed();
+    bump_language_reset();
 }
 
 /// `"py, .pyw  PYI"` to `["py", "pyw", "PYI"]`: separated by commas or
@@ -3402,5 +3756,22 @@ mod tests {
                 assert!(commands[i + 1..].iter().all(|b| b.keys != a.keys || b.keys.is_empty()), "{} is listed twice", a.keys);
             }
         }
+    }
+
+    #[test]
+    fn debugger_dropdown_covers_all_builtin_adapters() {
+        for id in scratch_debugger::BUILTIN_ADAPTER_IDS {
+            assert_ne!(debugger_name(Some(id)), "Custom", "missing label for adapter {id}");
+        }
+        assert_eq!(debugger_name(Some("gdb")), "GDB");
+        assert_eq!(debugger_name(Some("xdebug")), "PHP (Xdebug)");
+    }
+
+    #[test]
+    fn truncate_chars_preserves_multibyte_boundaries() {
+        let text = "‘".repeat(1600);
+        let truncated = truncate_chars(&text, 1500);
+        assert_eq!(truncated.chars().count(), 1501);
+        assert!(truncated.ends_with('…'));
     }
 }

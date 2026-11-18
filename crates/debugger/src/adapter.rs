@@ -20,16 +20,18 @@ use serde::{Deserialize, Serialize};
 use crate::error::DebugError;
 
 const BUILTIN_LLDB: &str = include_str!("adapters/lldb.toml");
+const BUILTIN_GDB: &str = include_str!("adapters/gdb.toml");
 const BUILTIN_PDB: &str = include_str!("adapters/pdb.toml");
 const BUILTIN_NODE: &str = include_str!("adapters/node.toml");
 const BUILTIN_JDB: &str = include_str!("adapters/jdb.toml");
 const BUILTIN_BASHDB: &str = include_str!("adapters/bashdb.toml");
 const BUILTIN_PERL: &str = include_str!("adapters/perl.toml");
 const BUILTIN_PHPDBG: &str = include_str!("adapters/phpdbg.toml");
+const BUILTIN_XDEBUG: &str = include_str!("adapters/xdebug.toml");
 
 /// Ids of the adapters embedded in the crate.
 pub const BUILTIN_ADAPTER_IDS: &[&str] =
-    &["lldb", "pdb", "node", "jdb", "bashdb", "perl", "phpdbg"];
+    &["lldb", "gdb", "pdb", "node", "jdb", "bashdb", "perl", "phpdbg", "xdebug"];
 
 /// Which built-in parser family should be used for a debugger's text output.
 ///
@@ -504,12 +506,14 @@ impl AdapterRegistry {
         let mut registry = Self::default();
         for text in [
             BUILTIN_LLDB,
+            BUILTIN_GDB,
             BUILTIN_PDB,
             BUILTIN_NODE,
             BUILTIN_JDB,
             BUILTIN_BASHDB,
             BUILTIN_PERL,
             BUILTIN_PHPDBG,
+            BUILTIN_XDEBUG,
         ] {
             match DebuggerAdapter::from_toml(text) {
                 Ok(adapter) => {
@@ -576,9 +580,13 @@ impl AdapterRegistry {
 
     /// The adapter configured for a language id, if any.
     pub fn for_language(&self, language: &str) -> Option<&DebuggerAdapter> {
-        self.adapters
-            .values()
-            .find(|a| a.languages.iter().any(|l| l == language))
+        Self::default_id_for_language(language)
+            .and_then(|id| self.get(id))
+            .or_else(|| {
+                self.adapters
+                    .values()
+                    .find(|a| a.languages.iter().any(|l| l == language))
+            })
     }
 
     /// The default adapter id for a ScratchRunner language id.

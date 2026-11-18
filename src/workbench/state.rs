@@ -34,6 +34,8 @@ pub struct Display {
     pub console_height: f32,
     /// The left navigator is shown.
     pub sidebar_visible: bool,
+    /// The navigator sidebar width in points.
+    pub sidebar_width: f32,
     /// The sidebar shows the project Search view instead of the file navigator.
     pub sidebar_search: bool,
     /// The console sits on the right of the editors instead of below them.
@@ -42,6 +44,10 @@ pub struct Display {
     pub console_width: f32,
     /// The right documentation view is shown.
     pub docs_visible: bool,
+    /// The documentation view width in points.
+    pub docs_width: f32,
+    /// Whether the documentation view is widened via its bottom-edge grabber.
+    pub docs_expanded: bool,
     /// The toolbar is shown (View > Hide Toolbar).
     pub toolbar_visible: bool,
     /// The tab strip is shown (View > Hide Tab Bar).
@@ -49,15 +55,49 @@ pub struct Display {
     /// Toolbar Back/Forward availability (caret history).
     pub can_go_back: bool,
     pub can_go_forward: bool,
+    /// Whether the main workbench window is key/focused.
+    pub window_focused: bool,
 }
 
 impl Default for Display {
     fn default() -> Self {
-        Self { tabs: Vec::new(), active: None, notice: String::new(), loading: true, console_visible: false, console_height: 200.0, sidebar_visible: true, sidebar_search: false, console_right: false, console_width: 360.0, docs_visible: false, toolbar_visible: true, tab_bar_visible: true, can_go_back: false, can_go_forward: false }
+        Self {
+            tabs: Vec::new(),
+            active: None,
+            notice: String::new(),
+            loading: true,
+            console_visible: false,
+            console_height: 200.0,
+            sidebar_visible: true,
+            sidebar_width: 240.0,
+            sidebar_search: false,
+            console_right: false,
+            console_width: 360.0,
+            docs_visible: false,
+            docs_width: 300.0,
+            docs_expanded: false,
+            toolbar_visible: true,
+            tab_bar_visible: true,
+            can_go_back: false,
+            can_go_forward: false,
+            window_focused: true,
+        }
     }
 }
 
+#[derive(Clone, Default, PartialEq)]
+pub(super) struct WindowBoundsSignal(pub Option<super::persistence::SavedBounds>);
+
 pub fn display() -> Signal<Display> { global::<Display>() }
+
+/// Structured result of a finished run, shown in the editor status bar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunOutcome {
+    pub code: Option<i32>,
+    pub duration_secs: f64,
+    pub canceled: bool,
+    pub command_not_found: bool,
+}
 
 pub struct OpenDocument {
     pub document: Document,
@@ -89,6 +129,10 @@ pub struct OpenDocument {
     pub diag_rev: Signal<u64>,
     /// The status line: `Ready`, `Running…`, `Run Succeeded · 0.02s`.
     pub status: Signal<String>,
+    /// Live resource usage `(cpu_percent, rss_bytes)` while running.
+    pub run_stats: Signal<Option<(f32, u64)>>,
+    /// Structured completion info for the status bar.
+    pub exit_info: Signal<Option<RunOutcome>>,
     /// Whether a run is in progress.
     pub running: Signal<bool>,
     pub handle: Option<RunHandle>,
@@ -134,12 +178,24 @@ impl Workspace {
 
 pub fn notice(message: impl Into<String>) { display().update(|state| state.notice = message.into()); }
 
+fn visible_title(doc: &OpenDocument, show_all_extensions: bool) -> String {
+    if show_all_extensions || doc.document.untitled {
+        return doc.title.clone();
+    }
+    std::path::Path::new(&doc.title)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| doc.title.clone())
+}
+
 /// Updates the small reactive view of the workspace, keeping text in editors.
 pub fn publish() {
+    let show_all_extensions = super::preferences::settings().with_untracked(|p| p.general.documents.show_all_extensions);
     let (tabs, active) = with(|workspace| {
         let tabs = workspace.documents.iter().map(|doc| {
             let def = workspace.registry.as_ref().and_then(|registry| registry.get(&doc.document.language));
-            Tab { id: doc.document.id, title: doc.title.clone(), dirty: doc.document.dirty,
+            Tab { id: doc.document.id, title: visible_title(doc, show_all_extensions), dirty: doc.document.dirty,
                 language_id: doc.document.language.clone(),
                 language: def.map_or_else(|| doc.document.language.clone(), |def| def.name.clone()),
                 syntax: def.map_or_else(|| "plain text".to_owned(), |def| def.editor_syntax.clone()) }
@@ -213,8 +269,8 @@ pub fn add(saved: SavedDocument) -> DocumentId {
     // Document signals must outlive the scope `add` happens to run in — a
     // transient owner (an event handler, a `dynamic` region) would take them
     // down on disposal and every later read would panic.
-    let (console_rev, text_rev, diag_rev, status, running) = Owner::detached().run(|| {
-        (signal(0), signal(0), signal(0), signal("Ready".into()), signal(false))
+    let (console_rev, text_rev, diag_rev, status, run_stats, exit_info, running) = Owner::detached().run(|| {
+        (signal(0), signal(0), signal(0), signal("Ready".into()), signal(None), signal(None), signal(false))
     });
     let diagnostics_data = saved.diagnostics.unwrap_or_default();
     let mut annotations = scratch_diagnostics::AnnotationSet::new();
@@ -223,8 +279,23 @@ pub fn add(saved: SavedDocument) -> DocumentId {
         editor: None, console: scratch_console_model::Console::new(scratch_console_model::ConsoleConfig::default()),
         console_rev, text_rev, highlighter: None,
         annotations, diagnostics_data, console_highlights: std::collections::HashMap::new(), diag_rev,
-        status, running, handle: None, saving: false };
-    with(|workspace| { workspace.documents.push(doc); workspace.active = Some(id); workspace.changed(); });
+        status, run_stats, exit_info, running, handle: None, saving: false };
+    let insert_mode = super::preferences::settings().with_untracked(|p| p.general.tabs.insert_new_tabs);
+    with(|workspace| {
+        match insert_mode {
+            scratch_config::InsertNewTabs::BeforeExisting => workspace.documents.insert(0, doc),
+            scratch_config::InsertNewTabs::AfterSelected => {
+                let idx = workspace.active
+                    .and_then(|active| workspace.documents.iter().position(|d| d.document.id == active))
+                    .map(|pos| pos + 1)
+                    .unwrap_or(workspace.documents.len());
+                workspace.documents.insert(idx, doc);
+            }
+            scratch_config::InsertNewTabs::AfterExisting => workspace.documents.push(doc),
+        }
+        workspace.active = Some(id);
+        workspace.changed();
+    });
     // A restored document's language may predate a rename (a draft kept as
     // `clip-renamed.sh`): detection by path puts it right before the LSP
     // and the highlighter see it. Detection does not run without a path:
@@ -254,25 +325,77 @@ fn new_document_language(active: Option<&str>, registry: Option<&LanguageRegistr
         .unwrap_or_else(|| "shell".to_owned())
 }
 
+/// Next unused untitled tab title (`Untitled.ext`, `Untitled 2.ext`, …).
+fn next_untitled_title(workspace: &Workspace, extension: &str) -> String {
+    let first = format!("Untitled.{extension}");
+    if !workspace.documents.iter().any(|doc| doc.title == first) {
+        return first;
+    }
+    let mut n = 2usize;
+    loop {
+        let candidate = format!("Untitled {n}.{extension}");
+        if !workspace.documents.iter().any(|doc| doc.title == candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// First-launch welcome document: runs `FIRST_LAUNCH_TEXT` (`echo "Welcome to ScratchRunner!"`)
+/// in Shell Script with caret at its `<##>` marker.
+pub fn new_first_launch_document() {
+    let (use_templates, user_indent) = super::preferences::settings().with_untracked(|p| {
+        (
+            p.general.documents.use_templates_for_new_files,
+            scratch_language::IndentStyle {
+                soft_tabs: p.text_editing.indentation.soft_tabs,
+                width: p.text_editing.indentation.tab_width as u8,
+            },
+        )
+    });
+    let language = scratch_language::FIRST_LAUNCH_LANGUAGE;
+    let (title, text, caret) = with(|workspace| {
+        let def = workspace.registry.as_ref().and_then(|r| r.get(language));
+        let extension = def.and_then(|d| d.extensions.first().map(String::as_str)).unwrap_or("sh");
+        let title = next_untitled_title(workspace, extension);
+        if !use_templates {
+            return (title, String::new(), None);
+        }
+        let indent = def.map(|d| d.effective_indent(user_indent)).unwrap_or(user_indent);
+        let rendered = scratch_language::render_template(
+            scratch_language::FIRST_LAUNCH_TEXT,
+            &scratch_language::TemplateContext::for_file(&title, indent),
+        );
+        (title, rendered.text, rendered.caret)
+    });
+    add_document(language, &title, text, caret, true);
+}
+
 /// A document in `language`, text from the language's default template when
 /// Preferences > Documents > `Use templates for new files` is on; the caret
 /// lands where the template's `<##>` was.
 pub fn new_document_in(language: &str) {
+    let (use_templates, user_indent) = super::preferences::settings().with_untracked(|p| {
+        (
+            p.general.documents.use_templates_for_new_files,
+            scratch_language::IndentStyle {
+                soft_tabs: p.text_editing.indentation.soft_tabs,
+                width: p.text_editing.indentation.tab_width as u8,
+            },
+        )
+    });
     let (title, text, caret) = with(|workspace| {
         let fallback = |language: &str| {
             let extension = workspace.registry.as_ref().and_then(|r| r.get(language))
                 .and_then(|def| def.extensions.first().cloned()).unwrap_or_else(|| "txt".to_owned());
-            (format!("Untitled.{extension}"), String::new(), None)
+            (next_untitled_title(workspace, &extension), String::new(), None)
         };
         let Some(registry) = workspace.registry.as_ref() else { return fallback(language); };
         let Some(def) = registry.get(language) else { return fallback(language); };
         let extension = def.extensions.first().map(String::as_str).unwrap_or("txt");
-        let title = format!("Untitled.{extension}");
-        let use_templates = super::preferences::settings().with_untracked(|p| p.general.documents.use_templates_for_new_files);
+        let title = next_untitled_title(workspace, extension);
         if !use_templates { return (title, String::new(), None); }
-        let indent = def.effective_indent(super::preferences::settings().with_untracked(|p| {
-            scratch_language::IndentStyle { soft_tabs: p.text_editing.indentation.soft_tabs, width: p.text_editing.indentation.tab_width as u8 }
-        }));
+        let indent = def.effective_indent(user_indent);
         let rendered = registry.new_document(language, &scratch_language::TemplateContext::for_file(&title, indent));
         (title, rendered.text, rendered.caret)
     });
@@ -289,7 +412,8 @@ pub fn new_document_with(language: Option<&str>, text: String) {
             .unwrap_or_else(|| "shell".to_owned());
         let extension = workspace.registry.as_ref().and_then(|r| r.get(&language))
             .and_then(|d| d.extensions.first().cloned()).unwrap_or_else(|| "txt".to_owned());
-        (language, format!("Untitled.{extension}"))
+        let title = next_untitled_title(workspace, &extension);
+        (language, title)
     });
     add_document(&language, &title, text, None, false);
 }
@@ -319,34 +443,50 @@ fn add_document(language: &str, title: &str, text: String, caret: Option<(u32, u
 /// from Template): one tab per file of the group; the first gets the focus
 /// and its caret marker.
 pub fn new_document_from_template(language: &str, template_name: &str) {
-    let files = with(|workspace| {
+    let user_indent = super::preferences::settings().with_untracked(|p| {
+        scratch_language::IndentStyle {
+            soft_tabs: p.text_editing.indentation.soft_tabs,
+            width: p.text_editing.indentation.tab_width as u8,
+        }
+    });
+    let template = with(|workspace| {
         let registry = workspace.registry.as_ref()?;
         let def = registry.get(language)?;
         let group = registry.templates_for(language).into_iter().find(|g| g.name == template_name)?;
-        let indent = def.effective_indent(super::preferences::settings().with_untracked(|p| {
-            scratch_language::IndentStyle { soft_tabs: p.text_editing.indentation.soft_tabs, width: p.text_editing.indentation.tab_width as u8 }
-        }));
-        Some(
+        let indent = def.effective_indent(user_indent);
+        Some((
+            indent,
             group
                 .files
                 .iter()
-                .map(|file| {
-                    let title = format!("Untitled.{}", file.extension);
-                    let rendered = scratch_language::render_template(
-                        &file.text,
-                        &scratch_language::TemplateContext::for_file(&title, indent),
-                    );
-                    (file.extension.clone(), rendered.text, rendered.caret)
-                })
+                .map(|file| (file.extension.clone(), file.text.clone()))
                 .collect::<Vec<_>>(),
-        )
+        ))
     });
-    let Some(files) = files else {
+    let Some((indent, files)) = template else {
         notice(format!("Language {language} has no template “{template_name}”."));
         return;
     };
-    for (extension, text, caret) in files {
-        add_document(language, &format!("Untitled.{extension}"), text, caret, true);
+    let total = files.len();
+    let mut first_id = None;
+    for (extension, source) in files {
+        let (title, text, caret) = with(|workspace| {
+            let title = next_untitled_title(workspace, &extension);
+            let rendered = scratch_language::render_template(
+                &source,
+                &scratch_language::TemplateContext::for_file(&title, indent),
+            );
+            (title, rendered.text, rendered.caret)
+        });
+        let id = add_document(language, &title, text, caret, true);
+        if first_id.is_none() {
+            first_id = Some(id);
+        }
+    }
+    if total > 1
+        && let Some(first_id) = first_id
+    {
+        activate(first_id);
     }
 }
 
@@ -465,16 +605,6 @@ pub fn step_tab(delta: i32) {
     if let Some(id) = id { activate(id); }
 }
 
-/// Activates the `index`th tab, or the last when `index` is beyond the end
-/// (⌘1–⌘9 select tabs 1–9; ⌘0 selects tab 10 / the last).
-pub fn activate_tab(index: usize) {
-    let id = with(|workspace| {
-        let index = index.min(workspace.documents.len().checked_sub(1)?);
-        Some(workspace.documents[index].document.id)
-    });
-    if let Some(id) = id { activate(id); }
-}
-
 /// Moves the active tab `delta` slots, clamped at the ends (Window menu's
 /// Move Tab Left / Right).
 pub fn move_active_tab(delta: i32) {
@@ -486,6 +616,7 @@ pub fn move_active_tab(delta: i32) {
         if to as usize == at { return false; }
         let doc = workspace.documents.remove(at);
         workspace.documents.insert(to as usize, doc);
+        workspace.changed();
         true
     });
     if moved { publish(); }
@@ -527,6 +658,7 @@ pub fn edited(id: DocumentId, value: &str) {
     } else {
         super::lsp::document_changed(id);
     }
+    super::diagnostics::on_edit(id);
 }
 
 /// `text_rev` is bumped outside `with`: its subscribers (the editor's
@@ -603,12 +735,15 @@ pub fn bump_console_rev(id: DocumentId) {
 /// The `diag_rev` read subscribes the binding to new imports.
 pub fn console_diagnostics(id: DocumentId) -> Vec<nsh_base::EditorDiagnostic> {
     use nsh_base::{EditorDiagnosticSeverity, EditorPosition, EditorRange};
+    let from_console = super::preferences::settings().with_untracked(|p| p.text_editing.diagnostics.from_console);
     with(|workspace| {
         let Some(doc) = workspace.doc(id) else { return Vec::new() };
         let _ = doc.diag_rev.get();
         if doc.annotations.counts().total() == 0 { return Vec::new(); }
         let index = scratch_diagnostics::LineIndex::new(&doc.text);
-        doc.annotations.visible().iter().filter_map(|annotation| {
+        doc.annotations.visible().iter().filter(|annotation| {
+            from_console || annotation.origin != scratch_diagnostics::Origin::Console
+        }).filter_map(|annotation| {
             let (start, end) = annotation.positions(&index)?;
             let mut diagnostic = nsh_base::EditorDiagnostic::default();
             diagnostic.range = EditorRange::new(
@@ -651,6 +786,15 @@ fn retitle(title: &str, extension: &str) -> String {
 }
 
 pub fn set_language(id: DocumentId, language: &str) {
+    let (use_templates, user_indent) = super::preferences::settings().with_untracked(|p| {
+        (
+            p.general.documents.use_templates_for_new_files,
+            scratch_language::IndentStyle {
+                soft_tabs: p.text_editing.indentation.soft_tabs,
+                width: p.text_editing.indentation.tab_width as u8,
+            },
+        )
+    });
     let (changed, swap) = with(|workspace| {
         let Some(extension) = workspace.registry.as_ref().and_then(|registry| registry.get(language))
             .map(|def| def.extensions.first().cloned()) else { return (false, None) };
@@ -668,13 +812,7 @@ pub fn set_language(id: DocumentId, language: &str) {
         // template, as CodeRunner does; once edited, only the language
         // changes and the text is kept.
         let swap = workspace.registry.as_ref().and_then(|registry| {
-            let indent = registry.get(language).map(|def| def.effective_indent(
-                super::preferences::settings().with_untracked(|p| scratch_language::IndentStyle {
-                    soft_tabs: p.text_editing.indentation.soft_tabs,
-                    width: p.text_editing.indentation.tab_width as u8,
-                }),
-            )).unwrap_or_default();
-            let use_templates = super::preferences::settings().with_untracked(|p| p.general.documents.use_templates_for_new_files);
+            let indent = registry.get(language).map(|def| def.effective_indent(user_indent)).unwrap_or_default();
             template_swap(registry, &doc.document, language, &title, use_templates, indent)
         });
         let Some(doc) = workspace.doc_mut(id) else { return (false, None) };
@@ -683,8 +821,15 @@ pub fn set_language(id: DocumentId, language: &str) {
         workspace.changed(); (true, swap)
     });
     if let Some((text, caret)) = swap {
+        with(|workspace| {
+            if let Some(doc) = workspace.doc_mut(id) {
+                doc.text = text.clone();
+                doc.document.dirty = false;
+                doc.document.pristine = true;
+            }
+        });
         if let Some(api) = editor_api(id) {
-            api.set_value(text.clone());
+            api.set_value(text);
             if let Some((line, column)) = caret {
                 let at = nsh_base::EditorPosition::new(line, column);
                 api.set_selections(vec![nsh_base::EditorSelection::caret(at)]);
@@ -693,7 +838,6 @@ pub fn set_language(id: DocumentId, language: &str) {
         }
         with(|workspace| {
             if let Some(doc) = workspace.doc_mut(id) {
-                doc.text = text;
                 // Writing the swapped template is not an edit: the
                 // document stays pristine and unmodified under the new
                 // language (the editor's set_value may have reported one).
@@ -750,11 +894,24 @@ pub fn snapshot() -> Snapshot {
     let ids = with(|workspace| workspace.documents.iter().map(|doc| doc.document.id).collect::<Vec<_>>());
     let values = ids.iter().map(|id| text(*id)).collect::<Vec<_>>();
     let view = display().get_untracked();
+    let window_bounds = global::<WindowBoundsSignal>().get_untracked().0;
     with(|workspace| Snapshot {
         documents: workspace.documents.iter().zip(values).map(|(doc, value)| SavedDocument {
             document: doc.document.clone(), title: doc.title.clone(), text: value.unwrap_or_else(|| doc.text.clone()),
             diagnostics: (!doc.diagnostics_data.is_empty()).then(|| doc.diagnostics_data.clone()),
-        }).collect(), active: workspace.active, console_height: view.console_height, console_visible: view.console_visible,
+        }).collect(),
+        active: workspace.active,
+        console_height: view.console_height,
+        console_visible: view.console_visible,
+        console_right: view.console_right,
+        console_width: view.console_width,
+        sidebar_visible: view.sidebar_visible,
+        sidebar_width: view.sidebar_width,
+        docs_visible: view.docs_visible,
+        docs_width: view.docs_width,
+        toolbar_visible: view.toolbar_visible,
+        tab_bar_visible: view.tab_bar_visible,
+        window_bounds,
         ..Snapshot::default()
     })
 }

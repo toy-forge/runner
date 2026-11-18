@@ -76,6 +76,71 @@ impl FakeHost {
         self.text[at..].chars().next().map_or(at, |c| at + c.len_utf8())
     }
 
+    fn clamp_line_col(&self, line_range: Range<usize>, col: usize) -> usize {
+        let line = &self.text[line_range.clone()];
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        let mut end = col.min(line.len());
+        while end > 0 && !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        line_range.start + end
+    }
+
+    fn line_move_up(&self, at: usize, col: usize) -> Option<usize> {
+        let p = self.paragraph_range(at);
+        if p.start == 0 {
+            return None;
+        }
+        let q = self.paragraph_range(p.start - 1);
+        Some(self.clamp_line_col(q, col))
+    }
+
+    fn line_move_down(&self, at: usize, col: usize) -> Option<usize> {
+        let p = self.paragraph_range(at);
+        if p.end >= self.text.len() {
+            return None;
+        }
+        let q = self.paragraph_range(p.end);
+        Some(self.clamp_line_col(q, col))
+    }
+
+    fn is_word_char(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
+    fn word_forward(&self, at: usize) -> usize {
+        let start = at.min(self.text.len());
+        for (rel, ch) in self.text[start..].char_indices() {
+            if Self::is_word_char(ch) {
+                let word_start = start + rel;
+                for (wrel, wch) in self.text[word_start..].char_indices() {
+                    if !Self::is_word_char(wch) {
+                        return word_start + wrel;
+                    }
+                }
+                return self.text.len();
+            }
+        }
+        self.text.len()
+    }
+
+    fn word_backward(&self, at: usize) -> usize {
+        let end = at.min(self.text.len());
+        for (idx, ch) in self.text[..end].char_indices().rev() {
+            if Self::is_word_char(ch) {
+                let mut start = idx;
+                for (widx, wch) in self.text[..idx].char_indices().rev() {
+                    if !Self::is_word_char(wch) {
+                        return start;
+                    }
+                    start = widx;
+                }
+                return 0;
+            }
+        }
+        0
+    }
+
     fn replace(&mut self, range: Range<usize>, with: &str) {
         self.text.replace_range(range, with);
         self.revision += 1;
@@ -211,6 +276,7 @@ impl Host for FakeHost {
             "moveLeftAndModifySelection" => self.modify(|h, at| h.prev(at)),
             "moveRightAndModifySelection" => self.modify(|h, at| h.next(at)),
             "moveToBeginningOfParagraph" => self.selection = Selection::caret(self.paragraph_range(s.start).start),
+            "moveToBeginningOfParagraphAndModifySelection" => self.modify(|h, at| h.paragraph_range(at).start),
             "moveToEndOfParagraph" => {
                 let p = self.paragraph_range(s.end);
                 let end = if self.text[p.clone()].ends_with('\n') { p.end - 1 } else { p.end };
@@ -222,18 +288,66 @@ impl Host for FakeHost {
                     if h.text[p.clone()].ends_with('\n') { p.end - 1 } else { p.end }
                 });
             }
+            "selectParagraph" => {
+                let start = self.paragraph_range(s.start).start;
+                let end = self.paragraph_range(s.end).end;
+                self.selection = Selection::new(start, end);
+            }
             "moveToBeginningOfDocument" => self.selection = Selection::caret(0),
             "moveToEndOfDocument" => self.selection = Selection::caret(self.text.len()),
-            "moveParagraphDown" => {
-                let p = self.paragraph_range(s.end);
-                let col = s.end - self.paragraph_range(s.start).start;
-                if p.end >= self.text.len() {
+            "moveUp" => {
+                let col = s.start - self.paragraph_range(s.start).start;
+                self.selection = Selection::caret(self.line_move_up(s.start, col).unwrap_or(0));
+            }
+            "moveDown" => {
+                let col = s.end - self.paragraph_range(s.end).start;
+                self.selection = Selection::caret(self.line_move_down(s.end, col).unwrap_or(self.text.len()));
+            }
+            "moveUpAndModifySelection" => {
+                self.modify(|h, at| {
+                    let col = at - h.paragraph_range(at).start;
+                    h.line_move_up(at, col).unwrap_or(0)
+                });
+            }
+            "moveDownAndModifySelection" => {
+                self.modify(|h, at| {
+                    let col = at - h.paragraph_range(at).start;
+                    h.line_move_down(at, col).unwrap_or(h.text.len())
+                });
+            }
+            "moveParagraphUp" => {
+                let col = s.start - self.paragraph_range(s.start).start;
+                let Some(pos) = self.line_move_up(s.start, col) else {
                     return CommandOutcome::Failed;
-                }
-                let q = self.paragraph_range(p.end);
-                let line = &self.text[q.clone()];
-                let line = line.strip_suffix('\n').unwrap_or(line);
-                self.selection = Selection::caret(q.start + col.min(line.len()));
+                };
+                self.selection = Selection::caret(pos);
+            }
+            "moveParagraphDown" => {
+                let col = s.end - self.paragraph_range(s.start).start;
+                let Some(pos) = self.line_move_down(s.end, col) else {
+                    return CommandOutcome::Failed;
+                };
+                self.selection = Selection::caret(pos);
+            }
+            "moveParagraphUpAndModifySelection" => {
+                self.modify(|h, at| {
+                    let col = at - h.paragraph_range(at).start;
+                    h.line_move_up(at, col).unwrap_or(0)
+                });
+            }
+            "moveParagraphDownAndModifySelection" => {
+                self.modify(|h, at| {
+                    let col = at - h.paragraph_range(at).start;
+                    h.line_move_down(at, col).unwrap_or(h.text.len())
+                });
+            }
+            "moveWordForward" | "moveWordRight" => self.selection = Selection::caret(self.word_forward(s.end)),
+            "moveWordBackward" | "moveWordLeft" => self.selection = Selection::caret(self.word_backward(s.start)),
+            "moveWordForwardAndModifySelection" | "moveWordRightAndModifySelection" => {
+                self.modify(|h, at| h.word_forward(at));
+            }
+            "moveWordBackwardAndModifySelection" | "moveWordLeftAndModifySelection" => {
+                self.modify(|h, at| h.word_backward(at));
             }
             "deleteForward" => {
                 let r = if s.is_empty() { s.start..self.next(s.start) } else { s.range() };

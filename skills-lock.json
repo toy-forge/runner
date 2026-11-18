@@ -18,6 +18,13 @@
       "sourceType": "github",
       "skillPath": "SKILL.md",
       "computedHash": "6050020d38c81ea7b86f558187cd9c268488d70ed25510539c801bb7c22629a2"
+    },
+    "review-forge": {
+      "source": "vikingmute/review-forge",
+      "commit": "743b2293251360b1cab645420190580d1bf49b53",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "9a4c8ab311b35a190332fd3d584f629ae7e12d29318f97e4d4d89eff038982f3"
     }
   }
 }

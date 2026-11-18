@@ -59,6 +59,101 @@ pub(super) fn mutate_library<R>(f: impl FnOnce(&mut ThemeLibrary) -> R) -> R {
     out
 }
 
+fn resolved_for(is_dark: bool) -> Arc<ResolvedTheme> {
+    global::<ThemesRevision>().get();
+    let name = preferences::settings().with(|prefs| prefs.themes.resolve(is_dark).to_owned());
+    let theme = with_library(|library| library.get_or_default(&name, is_dark));
+    Arc::new(theme.compile())
+}
+
+fn to_nsh_rgba(rgba: scratch_theme::Rgba) -> nsh_core::Rgba {
+    nsh_core::Rgba {
+        r: rgba.r as f32 / 255.0,
+        g: rgba.g as f32 / 255.0,
+        b: rgba.b as f32 / 255.0,
+        a: rgba.a as f32 / 255.0,
+    }
+}
+
+fn adaptive(light: scratch_theme::Rgba, dark: scratch_theme::Rgba) -> AdaptiveColor {
+    AdaptiveColor::new(to_nsh_rgba(light), to_nsh_rgba(dark))
+}
+
+/// Synchronizes NSH's design tokens with the active TextMate theme and font preferences.
+pub(super) fn install() {
+    static BASE_JSON: &str = include_str!("../../ui/theme.json");
+    effect(|| {
+        global::<ThemesRevision>().get();
+        let editor_font_size = preferences::settings().with(|prefs| prefs.text_editing.appearance.font.size as f32);
+        let console_font_size = (editor_font_size - 1.0).clamp(11.0, 20.0);
+        let light = resolved_for(false);
+        let dark = resolved_for(true);
+        let l = light.editor_colors();
+        let d = dark.editor_colors();
+        let lc = light.chrome();
+        let dc = dark.chrome();
+        let Ok((mut ui_theme, _)) = nsh_base::Theme::from_json_lenient(BASE_JSON) else {
+            return;
+        };
+        let default_bg = ui_theme.color("background").map(|c| (c.light, c.dark));
+        let default_fg = ui_theme.color("foreground").map(|c| (c.light, c.dark));
+        let base_bg_light: Hsla = to_nsh_rgba(l.background).into();
+        let base_fg_light: Hsla = to_nsh_rgba(l.foreground).into();
+        let base_bg_dark: Hsla = to_nsh_rgba(d.background).into();
+        let base_fg_dark: Hsla = to_nsh_rgba(d.foreground).into();
+        if !light.is_dark() && dark.is_dark() {
+            ui_theme.set_color("background", adaptive(l.background, d.background));
+            ui_theme.set_color("foreground", adaptive(l.foreground, d.foreground));
+        } else if !light.is_dark() {
+            ui_theme.set_color("background", AdaptiveColor { light: base_bg_light, dark: default_bg.map(|c| c.1).unwrap_or(base_bg_dark) });
+            ui_theme.set_color("foreground", AdaptiveColor { light: base_fg_light, dark: default_fg.map(|c| c.1).unwrap_or(base_fg_dark) });
+        } else if dark.is_dark() {
+            ui_theme.set_color("background", AdaptiveColor { light: default_bg.map(|c| c.0).unwrap_or(base_bg_light), dark: base_bg_dark });
+            ui_theme.set_color("foreground", AdaptiveColor { light: default_fg.map(|c| c.0).unwrap_or(base_fg_light), dark: base_fg_dark });
+        }
+        let mut set = |name: &str, light_col: scratch_theme::Rgba, dark_col: scratch_theme::Rgba| {
+            ui_theme.set_color(name, adaptive(light_col, dark_col));
+        };
+        set("editor-bg", l.background, d.background);
+        set("editor-fg", l.foreground, d.foreground);
+        set("editor-caret", l.caret, d.caret);
+        set("editor-selection", l.selection, d.selection);
+        set("editor-line-highlight", l.line_highlight, d.line_highlight);
+        set("editor-invisibles", l.invisibles, d.invisibles);
+        set("editor-indent-guide", l.indent_guide, d.indent_guide);
+        set("editor-indent-guide-active", l.active_guide, d.active_guide);
+        set("editor-ruler", l.ruler, d.ruler);
+        set("editor-bracket-match", l.matching_bracket, d.matching_bracket);
+        set("editor-find-match", l.find_highlight, d.find_highlight);
+        set("editor-bar", lc.tab_bar_background, dc.tab_bar_background);
+        set("editor-bar-foreground", lc.muted_foreground, dc.muted_foreground);
+        set("editor-bar-border", lc.separator, dc.separator);
+        set("gutter-bg", l.gutter_background, d.gutter_background);
+        set("gutter-fg", l.gutter_foreground, d.gutter_foreground);
+        set("gutter-fg-active", l.gutter_active_foreground, d.gutter_active_foreground);
+        set("gutter-separator", l.gutter_divider, d.gutter_divider);
+        set("window", lc.window_background, dc.window_background);
+        set("toolbar", lc.toolbar_background, dc.toolbar_background);
+        set("toolbar-border", lc.separator, dc.separator);
+        set(
+            "tab-bar",
+            lc.background.mix(lc.foreground, 0.06),
+            dc.background.mix(dc.foreground, 0.03),
+        );
+        set("sidebar", lc.sidebar_background.with_alpha(0xB8), dc.sidebar_background.with_alpha(0xB8));
+        set("sidebar-foreground", lc.sidebar_foreground, dc.sidebar_foreground);
+        set("sidebar-border", lc.separator, dc.separator);
+        set("console-bg", lc.console_background, dc.console_background);
+        set("console-fg", lc.console_foreground, dc.console_foreground);
+        set("tab-active", l.background, dc.background.mix(dc.foreground, 0.13));
+        set("tab-active-foreground", l.foreground, d.foreground);
+        set("tab-foreground", lc.muted_foreground, dc.muted_foreground);
+        ui_theme.set_number("editor-font-size", editor_font_size);
+        ui_theme.set_number("console-font-size", console_font_size);
+        set_tokens(ui_theme.into_tokens());
+    });
+}
+
 /// The theme the preferences resolve for the current appearance.
 fn resolved() -> Arc<ResolvedTheme> {
     global::<ThemesRevision>().get();
@@ -82,12 +177,7 @@ pub(super) fn match_appearance() -> bool {
 pub(super) fn theme_is_dark() -> bool { resolved().is_dark() }
 
 fn color(rgba: scratch_theme::Rgba) -> AdaptiveColor {
-    AdaptiveColor::from(nsh_core::Rgba {
-        r: rgba.r as f32 / 255.0,
-        g: rgba.g as f32 / 255.0,
-        b: rgba.b as f32 / 255.0,
-        a: rgba.a as f32 / 255.0,
-    })
+    AdaptiveColor::from(to_nsh_rgba(rgba))
 }
 
 fn part(style: StyleRefinement) -> Option<PartStyle> { Some(PartStyle(Style::from(style))) }
@@ -185,11 +275,29 @@ fn execution_mark(line: u32) -> EditorDecoration {
 /// The theme's spans for `id`'s text, as editor decorations. The `text_rev`
 /// read subscribes this binding to edits and language changes; `settings()`
 /// and `dark()` resubscribe it to theme and appearance changes.
+fn diagnostic_line_mark(line: u32, severity: scratch_diagnostics::Severity) -> EditorDecoration {
+    let bg = match severity {
+        scratch_diagnostics::Severity::Error => scratch_ui_kit::tokens::diag_error_bg(),
+        scratch_diagnostics::Severity::Warning => scratch_ui_kit::tokens::diag_warning_bg(),
+        scratch_diagnostics::Severity::Notice => scratch_ui_kit::tokens::diag_info_bg(),
+    };
+    let mut mark = EditorDecoration::default();
+    mark.range = EditorRange::new(EditorPosition::new(line, 0), EditorPosition::new(line, 0));
+    mark.line_style = Some(Style::from(StyleRefinement::default().bg(bg)));
+    mark
+}
+
+/// Highlights for `id`'s current text (syntax spans, breakpoints, stopped-line
+/// execution arrow, and optional diagnostic line tints).
 pub(super) fn decorations(id: DocumentId) -> Vec<EditorDecoration> {
-    let enabled = preferences::settings()
-        .with(|prefs| prefs.text_editing.appearance.syntax_highlighting);
+    let (enabled, highlight_diag_lines, from_console) = preferences::settings().with(|prefs| (
+        prefs.text_editing.appearance.syntax_highlighting,
+        prefs.text_editing.diagnostics.highlight_line,
+        prefs.text_editing.diagnostics.from_console,
+    ));
     let _ = dark();
     let theme = resolved();
+    let lsp_diags = if highlight_diag_lines { super::lsp::diagnostics(id) } else { Vec::new() };
     with(|workspace| {
         let syntax = workspace.doc(id).and_then(|doc| {
             workspace.registry.as_ref()
@@ -198,17 +306,52 @@ pub(super) fn decorations(id: DocumentId) -> Vec<EditorDecoration> {
         }).unwrap_or_else(|| "plain text".to_owned());
         let Some(doc) = workspace.doc_mut(id) else { return Vec::new(); };
         let _ = doc.text_rev.get();
-        if !enabled { return Vec::new(); }
-        let highlighter = doc.highlighter.get_or_insert_with(|| Highlighter::new(&syntax, theme.clone()));
-        highlighter.set_language(&syntax);
-        highlighter.set_theme(theme);
-        let text = doc.text.clone();
-        highlighter.update_text(text);
-        highlighter.advance(PARSE_BUDGET);
-        let lines = highlighter.line_count();
-        let mut out: Vec<_> = highlighter.highlight_lines(0, lines, true, PARSE_BUDGET).lines.iter()
-            .flat_map(|line| line.spans.iter().map(move |span| span_decoration(line.line, span)))
-            .collect();
+        let mut out: Vec<EditorDecoration> = if enabled {
+            let highlighter = doc.highlighter.get_or_insert_with(|| Highlighter::new(&syntax, theme.clone()));
+            highlighter.set_language(&syntax);
+            highlighter.set_theme(theme);
+            let text = doc.text.clone();
+            highlighter.update_text(text);
+            highlighter.advance(PARSE_BUDGET);
+            let lines = highlighter.line_count();
+            highlighter.highlight_lines(0, lines, true, PARSE_BUDGET).lines.iter()
+                .flat_map(|line| line.spans.iter().map(move |span| span_decoration(line.line, span)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if highlight_diag_lines {
+            let _ = doc.diag_rev.get();
+            let mut by_line: std::collections::BTreeMap<u32, scratch_diagnostics::Severity> = std::collections::BTreeMap::new();
+            let rank = |s: scratch_diagnostics::Severity| match s {
+                scratch_diagnostics::Severity::Notice => 1u8,
+                scratch_diagnostics::Severity::Warning => 2,
+                scratch_diagnostics::Severity::Error => 3,
+            };
+            let mut record = |line: u32, sev: scratch_diagnostics::Severity| {
+                by_line.entry(line)
+                    .and_modify(|cur| if rank(sev) > rank(*cur) { *cur = sev; })
+                    .or_insert(sev);
+            };
+            let index = scratch_diagnostics::LineIndex::new(&doc.text);
+            for annotation in doc.annotations.visible() {
+                if !from_console && annotation.origin == scratch_diagnostics::Origin::Console {
+                    continue;
+                }
+                if let Some((start, _)) = annotation.positions(&index) {
+                    record(start.line as u32, annotation.severity);
+                }
+            }
+            for diag in lsp_diags {
+                let sev = match diag.severity {
+                    nsh_base::EditorDiagnosticSeverity::Error => scratch_diagnostics::Severity::Error,
+                    nsh_base::EditorDiagnosticSeverity::Warning => scratch_diagnostics::Severity::Warning,
+                    _ => scratch_diagnostics::Severity::Notice,
+                };
+                record(diag.range.start.line, sev);
+            }
+            out.extend(by_line.into_iter().map(|(line, sev)| diagnostic_line_mark(line, sev)));
+        }
         out.extend(doc.document.breakpoints.as_slice().iter().map(breakpoint_mark));
         if let Some(line) = super::debugger::stopped_line(id) {
             out.push(execution_mark(line.saturating_sub(1)));
@@ -221,6 +364,97 @@ pub(super) fn decorations(id: DocumentId) -> Vec<EditorDecoration> {
 
 /// The longest a `colored_html`/`scopes_at` call may parse.
 const COPY_BUDGET: Duration = Duration::from_millis(50);
+
+/// Renders `id`'s full source text into a print-ready light HTML document
+/// honoring `Preferences.printing` (`with_colors`, `with_line_numbers`,
+/// `font_size`, `line_height`, margins), paired with its plain text fallback.
+pub(super) fn print_html(id: DocumentId, title: &str) -> Option<(String, String, (f64, f64, f64, f64))> {
+    let (printing, font_family) = preferences::settings().with_untracked(|prefs| (
+        prefs.printing.clone(),
+        prefs.text_editing.appearance.font.family.clone(),
+    ));
+    let print_theme = if printing.with_colors {
+        Some(Arc::new(with_library(|library| library.get_or_default(scratch_theme::DEFAULT_LIGHT, false)).compile()))
+    } else {
+        None
+    };
+    let margins = (
+        f64::from(printing.top_margin),
+        f64::from(printing.bottom_margin),
+        f64::from(printing.left_margin),
+        f64::from(printing.right_margin),
+    );
+    let (syntax, text) = with(|workspace| {
+        let syntax = workspace
+            .registry
+            .as_ref()
+            .and_then(|registry| {
+                workspace.doc(id).and_then(|doc| registry.get(&doc.document.language))
+            })
+            .map(|definition| definition.editor_syntax.clone())
+            .unwrap_or_else(|| "plain text".to_owned());
+        let doc = workspace.doc(id)?;
+        Some((syntax, doc.text.clone()))
+    })?;
+    let lines: Vec<&str> = text.split('\n').collect();
+    let highlighted = if let Some(theme) = print_theme {
+        let mut h = Highlighter::new(&syntax, theme);
+        h.update_text(text.clone());
+        h.advance(COPY_BUDGET);
+        Some(h.highlight_lines(0, lines.len(), false, COPY_BUDGET))
+    } else {
+        None
+    };
+    let font_size = printing.font_size.max(6);
+    let line_height = printing.line_height.max(1.0);
+    let num_width = lines.len().max(1).to_string().len();
+    let mut html = format!(
+        "<!DOCTYPE html><html><body style=\"background:#ffffff;color:#1a1d21;font-family:'{}',Menlo,monospace;font-size:{font_size}pt;line-height:{line_height};margin:0;\">",
+        escape(&font_family),
+    );
+    html.push_str(&format!(
+        "<div style=\"font-family:-apple-system,sans-serif;font-size:10pt;font-weight:600;color:#4a505a;border-bottom:1px solid #d8dce3;padding-bottom:4pt;margin-bottom:8pt;\">{}</div>",
+        escape(title),
+    ));
+    html.push_str("<pre style=\"margin:0;white-space:pre-wrap;word-wrap:break-word;font-family:inherit;font-size:inherit;line-height:inherit;\">");
+    for (index, raw) in lines.iter().enumerate() {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if printing.with_line_numbers {
+            html.push_str(&format!(
+                "<span style=\"color:#8f98a5;user-select:none;\">{:>width$}  </span>",
+                index + 1,
+                width = num_width,
+            ));
+        }
+        let boundaries = utf16_boundaries(line);
+        let columns = boundaries.len() - 1;
+        let spans = highlighted
+            .as_ref()
+            .and_then(|hl| hl.lines.iter().find(|spans| spans.line as usize == index));
+        let mut at = 0u32;
+        if let Some(spans) = spans {
+            for span in &spans.spans {
+                let end = span.col_end.min(columns as u32);
+                let start = span.col_start.min(end);
+                if start > at {
+                    html.push_str(&escape(&line[boundaries[at as usize]..boundaries[start as usize]]));
+                }
+                if end > start {
+                    html.push_str(&styled_span(&line[boundaries[start as usize]..boundaries[end as usize]], &span.style));
+                }
+                at = end;
+            }
+        }
+        if (at as usize) < columns {
+            html.push_str(&escape(&line[boundaries[at as usize]..boundaries[columns]]));
+        }
+        if index + 1 < lines.len() {
+            html.push('\n');
+        }
+    }
+    html.push_str("</pre></body></html>");
+    Some((html, text, margins))
+}
 
 /// "Copy with Colors": `start..end` of `id` as theme-styled HTML plus the
 /// plain text, for the pasteboard's `public.html` flavor.
@@ -349,7 +583,11 @@ fn utf16_boundaries(line: &str) -> Vec<usize> {
 
 /// HTML-escaped `text`.
 fn escape(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 /// `text` in a `style`-colored `<span>`.
@@ -387,6 +625,9 @@ mod tests {
 
     #[test]
     fn escape_html() {
-        assert_eq!(escape("<a> & </a>"), "&lt;a&gt; &amp; &lt;/a&gt;");
+        assert_eq!(
+            escape("<a> & \"b\" 'c' </a>"),
+            "&lt;a&gt; &amp; &quot;b&quot; &#39;c&#39; &lt;/a&gt;"
+        );
     }
 }

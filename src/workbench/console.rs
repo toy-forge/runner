@@ -23,8 +23,9 @@
 use std::collections::BTreeMap;
 
 use nsh_base::{EditorApi, input};
-use nsh_core::element::ImageSrc;
+use nsh_core::element::{ImageSrc, WebNavigation};
 use nsh_core::element::desktop::{MenuItem, popup_menu};
+use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 use scratch_console_model::{Attrs, Color as ConsoleColor, Console, Level, LinkTarget, Marks, SpanOptions, Stream};
 use scratch_language::ConsoleType;
@@ -161,7 +162,6 @@ fn header() -> impl IntoElement {
                 [Segment::new("Preview"), Segment::new("Terminal")],
                 move || usize::from(forced_terminal()),
                 |index| {
-                    eprintln!("console-toggle {index}");
                     let Some(id) = with(|workspace| workspace.active) else { return };
                     global::<ConsoleToggles>().update(|t| { t.0.insert(id, index == 1); });
                 },
@@ -295,21 +295,59 @@ fn filtered_source(at: usize) -> Option<u32> {
 }
 
 fn output() -> impl IntoElement {
-    virtual_list(filtered_count, move |at| {
-        view().px_3().h(px(18.0)).flex_none().overflow_hidden().child(dynamic(move || {
-            text("").select_text().number_of_lines(1u32)
-                .text_overflow(nsh_core::EllipsizeMode::Clip)
-                .font_family(scratch_ui_kit::typography::CODE_FONT_STACK)
-                .text_size(px(13.0))
-                .children(active_spans(at.index()).into_iter().map(span_view))
+    let list_ref = element_ref();
+    let scrolled_away = signal(false);
+    let scroll_ref = list_ref.clone();
+    let follow_ref = list_ref.clone();
+    effect(move || {
+        let count = filtered_count();
+        if count == 0 {
+            scrolled_away.set(false);
+        } else if !scrolled_away.get_untracked() {
+            let r = follow_ref.clone();
+            spawn(async move {
+                next_frame().await;
+                r.scroll_to_end(false);
+            });
+        }
+    });
+    view().flex_1().min_h(px(0.0)).min_w(px(0.0)).relative()
+        .child(
+            virtual_list(filtered_count, move |at| {
+                view().px_3().h(px(18.0)).flex_none().overflow_hidden().child(dynamic(move || {
+                    text("").select_text().number_of_lines(1u32)
+                        .text_overflow(nsh_core::EllipsizeMode::Clip)
+                        .font_family(scratch_ui_kit::typography::CODE_FONT_STACK)
+                        .text_size(px(13.0))
+                        .children(active_spans(at.index()).into_iter().map(span_view))
+                }))
+            })
+            .element_ref(&list_ref)
+            .on_scroll(move |ev: &ScrollEvent| {
+                let bottom_gap = ev.content_size.height.0 - (ev.offset.y.0 + ev.size.height.0);
+                scrolled_away.set(bottom_gap > 24.0 && ev.content_size.height.0 > ev.size.height.0 + 4.0);
+            })
+            .estimated_item_size(px(18.0))
+            .empty(view().flex_1().items_center().justify_center().p_3()
+                .child(text("Output appears here when you run the document (⌘R)").text_sm().text_color(tokens::muted_foreground)))
+            .flex_1()
+            .min_h(px(0.0)),
+        )
+        .child(when(move || scrolled_away.get() && filtered_count() > 0, move || {
+            let r = scroll_ref.clone();
+            view().absolute().right_3().bottom_2().rounded_full().shadow_sm()
+                .child(button(
+                    "Jump to Bottom",
+                    ButtonOptions::new()
+                        .variant(ButtonVariant::Default)
+                        .size(ControlSize::Sm)
+                        .icon(IconName::ArrowDown),
+                    move || {
+                        scrolled_away.set(false);
+                        r.scroll_to_end(true);
+                    },
+                ))
         }))
-    })
-    .alignment(ListAlignment::Bottom)
-    .estimated_item_size(px(18.0))
-    .empty(view().flex_1().items_center().justify_center().p_3()
-        .child(text("Output appears here when you run the document (⌘R)").text_sm().text_color(tokens::muted_foreground)))
-    .flex_1()
-    .min_h(px(0.0))
 }
 
 /// One rendered piece of a console line (uniform style, link, marks).
@@ -455,7 +493,50 @@ fn active_spans(index: usize) -> Vec<ConsoleSpan> {
     }).unwrap_or_default()
 }
 
+/// Shell/program input history navigated with Up/Down while the input line
+/// has focus.
+#[derive(Clone, Default, PartialEq)]
+struct InputHistory {
+    entries: Vec<String>,
+    cursor: Option<usize>,
+    saved_draft: String,
+}
+
 fn input_line(draft: Signal<String>) -> impl IntoElement {
+    let focused = signal(false);
+    effect(move || {
+        if !focused.get() { return; }
+        let opts = KeyOptions { when: When::Always, repeat: true, pass_through: false };
+        on_key_with("up", opts, move |_| {
+            global::<InputHistory>().update(|h| {
+                if h.entries.is_empty() { return; }
+                let next = match h.cursor {
+                    None => {
+                        h.saved_draft = draft.get_untracked();
+                        h.entries.len() - 1
+                    }
+                    Some(0) => 0,
+                    Some(i) => i - 1,
+                };
+                h.cursor = Some(next);
+                draft.set(h.entries[next].clone());
+            });
+        });
+        on_key_with("down", opts, move |_| {
+            global::<InputHistory>().update(|h| {
+                let Some(idx) = h.cursor else { return; };
+                if idx + 1 < h.entries.len() {
+                    let next = idx + 1;
+                    h.cursor = Some(next);
+                    draft.set(h.entries[next].clone());
+                } else {
+                    h.cursor = None;
+                    let saved = std::mem::take(&mut h.saved_draft);
+                    draft.set(saved);
+                }
+            });
+        });
+    });
     input()
         .value(move || draft.get())
         .placeholder(move || {
@@ -464,8 +545,23 @@ fn input_line(draft: Signal<String>) -> impl IntoElement {
         })
         .placeholder_color(|| color(tokens::muted_foreground()))
         .caret_color(|| color(tokens::primary()))
+        .on_focus(move || focused.set(true))
+        .on_blur(move || focused.set(false))
         .on_change(move |value: &str| draft.set(value.to_owned()))
         .on_submit(move |value: &str| {
+            if !value.trim().is_empty() {
+                global::<InputHistory>().update(|h| {
+                    if h.entries.last().map(String::as_str) != Some(value) {
+                        h.entries.push(value.to_owned());
+                        if h.entries.len() > 200 {
+                            let overflow = h.entries.len() - 200;
+                            h.entries.drain(..overflow);
+                        }
+                    }
+                    h.cursor = None;
+                    h.saved_draft.clear();
+                });
+            }
             if debugging_active() {
                 super::debugger::send_input(value);
             } else {
@@ -497,11 +593,74 @@ fn active_running() -> bool {
 
 // ------------------------------------------------------------ web output
 
-/// The active document's source text (subscribes to text revisions).
-fn source_text() -> String {
-    display().with(|view| view.active);
+/// Per-document state of the embedded `WKWebView` preview (custom output URL,
+/// live mode toggle, navigation flags, and JS console inspector).
+#[derive(Clone, Default, PartialEq)]
+struct WebPreviewState {
+    custom_url: String,
+    editing_url: bool,
+    url_draft: String,
+    live_override: Option<bool>,
+    inspector_open: bool,
+    can_back: bool,
+    can_forward: bool,
+    loading: bool,
+    title: String,
+    current_url: String,
+    error: Option<String>,
+    logs: Vec<(String, String)>,
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct WebPreviews(BTreeMap<DocumentId, WebPreviewState>);
+
+fn web_previews() -> Signal<WebPreviews> { global::<WebPreviews>() }
+
+fn update_preview(id: DocumentId, f: impl FnOnce(&mut WebPreviewState)) {
+    web_previews().update(|all| f(all.0.entry(id).or_default()));
+}
+
+const CONSOLE_HOOK_JS: &str = r#"(function(){
+  if (window.__crHooked) return;
+  window.__crHooked = true;
+  function send(level, args) {
+    try {
+      var text = Array.prototype.map.call(args, function(a) {
+        if (typeof a === 'string') return a;
+        try { return JSON.stringify(a); } catch(_) { return String(a); }
+      }).join(' ');
+      if (window.nsh && window.nsh.postMessage) {
+        window.nsh.postMessage(JSON.stringify({ kind: 'console', level: level, text: text }));
+      }
+    } catch (_) {}
+  }
+  ['log','info','warn','error'].forEach(function(lv) {
+    var orig = console[lv];
+    console[lv] = function() {
+      send(lv, arguments);
+      return orig ? orig.apply(console, arguments) : undefined;
+    };
+  });
+  window.addEventListener('error', function(e) {
+    var loc = e.filename ? (' (' + e.filename + ':' + e.lineno + ')') : '';
+    send('error', [String(e.message || e) + loc]);
+  });
+})();"#;
+
+fn active_doc_base_url(id: DocumentId) -> Option<String> {
     with(|workspace| {
-        let doc = workspace.active.and_then(|id| workspace.doc(id))?;
+        let doc = workspace.doc(id)?;
+        let saved = state::saved_path(&doc.document)?;
+        let dir = saved.parent()?;
+        let mut uri = scratch_lsp::path_to_uri(dir);
+        if !uri.ends_with('/') { uri.push('/'); }
+        Some(uri)
+    })
+}
+
+fn source_text_for(id: DocumentId) -> String {
+    with(|workspace| {
+        let doc = workspace.doc(id)?;
         let _ = doc.text_rev.get();
         doc.editor
             .and_then(|reference| reference.api::<EditorApi>())
@@ -510,11 +669,9 @@ fn source_text() -> String {
     }).unwrap_or_default()
 }
 
-/// The active run's collected stdout (subscribes to console revisions).
-fn stdout_text() -> String {
-    display().with(|view| view.active);
+fn stdout_text_for(id: DocumentId) -> String {
     with(|workspace| {
-        let doc = workspace.active.and_then(|id| workspace.doc(id))?;
+        let doc = workspace.doc(id)?;
         let _ = doc.console_rev.get();
         let mut out = String::new();
         for index in 0..doc.console.line_count() {
@@ -527,34 +684,413 @@ fn stdout_text() -> String {
     }).unwrap_or_default()
 }
 
-/// The `Web` / `Web Resource` preview: a `TextView` over the in-process
-/// markdown render, the live source, or the run's output wrapped in the
-/// host page. The content is computed eagerly in the `dynamic` pass —
-/// `spec()` subscribes to the console/text revisions so the preview
-/// rebuilds whenever they change; a lazily-read prop calling [`with`]
-/// would double-borrow the workspace inside `TextView`'s own pass.
+fn doc_spec(id: DocumentId) -> Option<scratch_language::ConsoleSpec> {
+    with(|workspace| {
+        let doc = workspace.doc(id)?;
+        workspace.registry.as_ref()?.get(&doc.document.language).map(|def| def.console.clone())
+    })
+}
+
+fn rendered_web_html(id: DocumentId) -> String {
+    let Some(spec) = doc_spec(id) else { return String::new(); };
+    let live_override = web_previews().with(|all| all.0.get(&id).and_then(|p| p.live_override));
+    let is_markdown = spec.renderer.as_deref() == Some("markdown");
+    let is_live = live_override.unwrap_or(is_markdown || spec.live);
+    if is_markdown {
+        let raw = if is_live { source_text_for(id) } else { stdout_text_for(id) };
+        if raw.trim().is_empty() {
+            return themed_placeholder("Markdown preview appears here as you edit.");
+        }
+        return markdown_to_html(&raw);
+    }
+    match spec.kind {
+        ConsoleType::Web => {
+            let html = if is_live { source_text_for(id) } else { stdout_text_for(id) };
+            if html.trim().is_empty() {
+                return themed_placeholder("HTML preview appears here when you edit or run the document (⌘R).");
+            }
+            html
+        }
+        ConsoleType::WebResource => {
+            let out = stdout_text_for(id);
+            if out.trim().is_empty() {
+                return themed_placeholder("Run the document (⌘R) to inspect its web output.");
+            }
+            host_page(&out)
+        }
+        _ => String::new(),
+    }
+}
+
+fn themed_placeholder(message: &str) -> String {
+    let bg = color(tokens::background()).to_hex();
+    let muted = color(tokens::muted_foreground()).to_hex();
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><style>\
+        html,body{{height:100%;margin:0;background:{bg};color:{muted};\
+        font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:13px;\
+        display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;box-sizing:border-box;}}\
+        </style></head><body><div>{message}</div></body></html>"
+    )
+}
+
+/// Converts Markdown to self-contained HTML styled with the active light/dark tokens.
+fn markdown_to_html(md: &str) -> String {
+    let body = markdown::to_html_with_options(md, &markdown::Options::gfm())
+        .unwrap_or_else(|_| markdown::to_html(md));
+    let bg = color(tokens::background()).to_hex();
+    let fg = color(tokens::foreground()).to_hex();
+    let muted = color(tokens::muted_foreground()).to_hex();
+    let surface = color(tokens::card()).to_hex();
+    let code_bg = color(tokens::muted()).to_hex();
+    let border = color(tokens::border()).to_hex();
+    let link = color(tokens::link()).to_hex();
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><style>\
+        :root{{color-scheme:light dark;}}\
+        body{{margin:0;padding:18px 22px;background:{bg};color:{fg};\
+        font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif;\
+        font-size:14px;line-height:1.6;word-wrap:break-word;}}\
+        h1,h2,h3,h4,h5,h6{{margin:1.1em 0 .45em;font-weight:600;line-height:1.25;}}\
+        h1{{font-size:1.65em;border-bottom:1px solid {border};padding-bottom:.28em;}}\
+        h2{{font-size:1.32em;border-bottom:1px solid {border};padding-bottom:.22em;}}\
+        h3{{font-size:1.12em;}}\
+        p,ul,ol,blockquote,table,pre{{margin:0 0 .85em;}}\
+        a{{color:{link};text-decoration:none;}}a:hover{{text-decoration:underline;}}\
+        code{{font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:.9em;\
+        background:{code_bg};padding:.14em .38em;border-radius:4px;}}\
+        pre{{background:{surface};border:1px solid {border};border-radius:6px;\
+        padding:10px 12px;overflow-x:auto;}}\
+        pre code{{background:transparent;padding:0;font-size:12.5px;line-height:1.5;}}\
+        blockquote{{margin-left:0;padding:2px 12px;border-left:3px solid {border};color:{muted};}}\
+        table{{border-collapse:collapse;width:100%;}}\
+        th,td{{border:1px solid {border};padding:6px 10px;text-align:left;}}\
+        th{{background:{surface};font-weight:600;}}\
+        hr{{border:0;border-top:1px solid {border};margin:1.2em 0;}}\
+        img{{max-width:100%;height:auto;}}\
+        </style></head><body>{body}</body></html>"
+    )
+}
+
+fn push_web_log(id: DocumentId, level: String, text: String) {
+    update_preview(id, |p| {
+        p.logs.push((level, text));
+        if p.logs.len() > 200 {
+            let extra = p.logs.len() - 200;
+            p.logs.drain(..extra);
+        }
+    });
+}
+
+fn parse_console_message(id: DocumentId, data: &str) {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(data)
+        && value.get("kind").and_then(|k| k.as_str()) == Some("console")
+    {
+        let level = value.get("level").and_then(|v| v.as_str()).unwrap_or("log").to_owned();
+        let msg = value.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
+        push_web_log(id, level, msg);
+    }
+}
+
+fn has_custom_preview_url(state: &WebPreviewState) -> bool {
+    !state.custom_url.trim().is_empty()
+}
+
+fn commit_custom_url(state: &mut WebPreviewState, url: &str) {
+    state.custom_url = url.trim().to_owned();
+    state.editing_url = false;
+    state.error = None;
+}
+
+/// Real `WKWebView` console preview with a 26pt Web Resource Bar and an
+/// expandable bottom JS Console Inspector.
 fn web_output() -> impl IntoElement {
-    let (markdown, html) = match spec() {
-        Some(spec) if spec.renderer.as_deref() == Some("markdown") => {
-            (Some(SharedString::from(source_text())), None)
-        }
-        Some(spec) => {
-            let html = match spec.kind {
-                ConsoleType::Web if spec.live => source_text(),
-                ConsoleType::Web => stdout_text(),
-                ConsoleType::WebResource => host_page(&stdout_text()),
-                _ => String::new(),
-            };
-            (None, Some(SharedString::from(html)))
-        }
-        None => (None, None),
+    let active_id = display().with(|view| view.active);
+    let Some(doc_id) = active_id else {
+        return view().flex_1().min_h(px(0.0)).items_center().justify_center()
+            .child(text("No active document").text_sm().text_color(tokens::muted_foreground))
+            .into_element();
     };
-    view().flex_1().min_h(px(0.0)).min_w(px(0.0)).p_3()
-        .child(nsh_base::text_view()
-            .flex_1().min_h(px(0.0))
-            .markdown(markdown)
-            .html(html)
-            .selectable(true))
+    let web_ref = element_ref();
+    let js_draft = signal(String::new());
+    let resource_bar = web_resource_bar(doc_id, web_ref.clone());
+    let inspector = web_inspector_drawer(doc_id, web_ref.clone(), js_draft);
+
+    let base_url = active_doc_base_url(doc_id);
+    let has_custom = computed(move || {
+        web_previews().with(|all| all.0.get(&doc_id).is_some_and(has_custom_preview_url))
+    });
+    let web_host = dynamic(move || {
+        let has_custom = has_custom.get();
+        let r = web_ref.clone();
+        let wv = if has_custom {
+            web_view(move || {
+                web_previews().with(|all| {
+                    all.0.get(&doc_id).map(|p| p.custom_url.clone()).unwrap_or_default()
+                })
+            })
+        } else {
+            web_view_html(move || rendered_web_html(doc_id), base_url.as_deref())
+        };
+        wv.element_ref(&r)
+            .injected_java_script_before_content(CONSOLE_HOOK_JS)
+            .on_load_start(move |nav: &WebNavigation| {
+                update_preview(doc_id, |p| {
+                    p.loading = true;
+                    p.error = None;
+                    p.current_url = nav.url.clone();
+                    p.can_back = nav.can_go_back;
+                    p.can_forward = nav.can_go_forward;
+                });
+            })
+            .on_load(move |nav: &WebNavigation| {
+                update_preview(doc_id, |p| {
+                    p.loading = false;
+                    p.current_url = nav.url.clone();
+                    p.title = nav.title.clone();
+                    p.can_back = nav.can_go_back;
+                    p.can_forward = nav.can_go_forward;
+                });
+            })
+            .on_navigation_state_change(move |nav: &WebNavigation| {
+                update_preview(doc_id, |p| {
+                    p.loading = nav.loading;
+                    p.current_url = nav.url.clone();
+                    p.title = nav.title.clone();
+                    p.can_back = nav.can_go_back;
+                    p.can_forward = nav.can_go_forward;
+                });
+            })
+            .on_error(move |msg: &str| {
+                let message = msg.to_owned();
+                update_preview(doc_id, |p| {
+                    p.loading = false;
+                    p.error = Some(message.clone());
+                });
+                push_web_log(doc_id, "error".into(), msg.to_owned());
+            })
+            .on_message(move |data: &str| parse_console_message(doc_id, data))
+            .flex_1()
+            .min_h(px(0.0))
+            .min_w(px(0.0))
+            .into_element()
+    });
+
+    view().flex_1().min_h(px(0.0)).min_w(px(0.0)).flex_col()
+        .child(resource_bar)
+        .child(view().flex_1().min_h(px(0.0)).min_w(px(0.0)).relative()
+            .child(web_host)
+            .child(when(move || web_previews().with(|all| all.0.get(&doc_id).and_then(|p| p.error.clone()).is_some()), move || {
+                let msg = web_previews().with(|all| all.0.get(&doc_id).and_then(|p| p.error.clone()).unwrap_or_default());
+                view().px_3().py_1p5().border_t_1().border_color(tokens::border).bg(tokens::destructive_muted)
+                    .flex_row().items_center().gap_2()
+                    .child(glyph(IconName::WarningTriangle, IconSize::Xs, Tone::Danger))
+                    .child(type_caption().apply(text(msg)).text_color(tokens::destructive).flex_1().min_w(px(0.0)))
+            })))
+        .child(inspector)
+        .into_element()
+}
+
+fn web_resource_bar(doc_id: DocumentId, web_ref: ElementRef) -> impl IntoElement {
+    let spec = doc_spec(doc_id);
+    let is_markdown = spec.as_ref().is_some_and(|s| s.renderer.as_deref() == Some("markdown"));
+    let can_live = is_markdown || spec.as_ref().is_some_and(|s| s.kind == ConsoleType::Web);
+    let default_live = spec.as_ref().is_some_and(|s| is_markdown || s.live);
+
+    let r_back = web_ref.clone();
+    let r_fwd = web_ref.clone();
+    let r_rel = web_ref.clone();
+    let can_back = computed(move || web_previews().with(|all| all.0.get(&doc_id).is_some_and(|p| p.can_back)));
+    let can_fwd = computed(move || web_previews().with(|all| all.0.get(&doc_id).is_some_and(|p| p.can_forward)));
+    let editing = computed(move || web_previews().with(|all| all.0.get(&doc_id).is_some_and(|p| p.editing_url)));
+    let custom_url_label = computed(move || web_previews().with(|all| all.0.get(&doc_id).map(|p| p.custom_url.clone()).unwrap_or_default()));
+    let live_state = computed(move || {
+        web_previews().with(|all| {
+            let p = all.0.get(&doc_id);
+            (
+                p.is_some_and(has_custom_preview_url),
+                p.and_then(|p| p.live_override).unwrap_or(default_live),
+            )
+        })
+    });
+    let inspector_open = computed(move || web_previews().with(|all| all.0.get(&doc_id).is_some_and(|p| p.inspector_open)));
+
+    view().h(px(26.0)).flex_shrink(0.0).flex_row().items_center().gap_1().px_2()
+        .border_b_1().border_color(tokens::editor_bar_border).bg(tokens::editor_bar)
+        .child(dynamic(move || {
+            let can_back = can_back.get();
+            let r = r_back.clone();
+            icon_button(IconName::ChevronLeft, "Back", IconButtonOptions::new().size(ControlSize::Sm).disabled(!can_back), move || r.go_back()).into_element()
+        }))
+        .child(dynamic(move || {
+            let can_fwd = can_fwd.get();
+            let r = r_fwd.clone();
+            icon_button(IconName::ChevronRight, "Forward", IconButtonOptions::new().size(ControlSize::Sm).disabled(!can_fwd), move || r.go_forward()).into_element()
+        }))
+        .child(icon_button(IconName::Refresh, "Reload Web View", IconButtonOptions::new().size(ControlSize::Sm), move || {
+            update_preview(doc_id, |p| p.error = None);
+            r_rel.reload();
+        }))
+        .child(view().flex_1().min_w(px(0.0)).child(dynamic(move || {
+            if editing.get() {
+                view().flex_row().items_center().gap_1()
+                    .child(view().flex_1().min_w(px(0.0)).child(
+                        input()
+                            .value(move || web_previews().with(|all| all.0.get(&doc_id).map(|p| p.url_draft.clone()).unwrap_or_default()))
+                            .placeholder("http://localhost:3000 or Custom Output URL…")
+                            .placeholder_color(|| color(tokens::muted_foreground()))
+                            .caret_color(|| color(tokens::primary()))
+                            .on_change(move |v: &str| {
+                                let next = v.to_owned();
+                                update_preview(doc_id, |p| p.url_draft = next);
+                            })
+                            .on_submit(move |v: &str| {
+                                update_preview(doc_id, |p| commit_custom_url(p, v));
+                            })
+                            .h(px(20.0)).px_2().text_xs()
+                            .bg(tokens::field).text_color(tokens::foreground)
+                            .rounded(px(tokens::radius_sm()))
+                            .border_1().border_color(tokens::border),
+                    ))
+                    .child(button("Done", ButtonOptions::new().variant(ButtonVariant::Ghost).size(ControlSize::Sm), move || {
+                        update_preview(doc_id, |p| {
+                            let url = p.url_draft.clone();
+                            commit_custom_url(p, &url);
+                        });
+                    }))
+                    .child(button("Reset", ButtonOptions::new().variant(ButtonVariant::Ghost).size(ControlSize::Sm), move || {
+                        update_preview(doc_id, |p| {
+                            p.custom_url.clear();
+                            p.url_draft.clear();
+                            p.editing_url = false;
+                            p.error = None;
+                        });
+                    }))
+                    .into_element()
+            } else {
+                let custom = custom_url_label.get();
+                let label = if !custom.is_empty() {
+                    custom
+                } else if is_markdown {
+                    "Live Markdown (Custom Output…)".to_owned()
+                } else {
+                    "Custom Output…".to_owned()
+                };
+                button(
+                    SharedString::from(label),
+                    ButtonOptions::new().variant(ButtonVariant::Ghost).size(ControlSize::Sm).icon(IconName::Globe),
+                    move || {
+                        update_preview(doc_id, |p| {
+                            p.url_draft = p.custom_url.clone();
+                            p.editing_url = true;
+                        });
+                    },
+                ).into_element()
+            }
+        })))
+        .child(when(move || can_live, move || {
+            dynamic(move || {
+                let (custom_active, is_live) = live_state.get();
+                button(
+                    "Live",
+                    ButtonOptions::new()
+                        .variant(if is_live && !custom_active { ButtonVariant::Default } else { ButtonVariant::Ghost })
+                        .size(ControlSize::Sm)
+                        .disabled(custom_active),
+                    move || {
+                        update_preview(doc_id, |p| {
+                            let cur = p.live_override.unwrap_or(default_live);
+                            p.live_override = Some(!cur);
+                        });
+                    },
+                ).into_element()
+            })
+        }))
+        .child(dynamic(move || {
+            let open = inspector_open.get();
+            icon_button(
+                IconName::WebInspectorWindow,
+                "Web Console Inspector",
+                IconButtonOptions::new().size(ControlSize::Sm).selected(open),
+                move || update_preview(doc_id, |p| p.inspector_open = !p.inspector_open),
+            ).into_element()
+        }))
+        .child(icon_button(IconName::ArrowUpRight, "Open in Browser", IconButtonOptions::new().size(ControlSize::Sm), move || {
+            let custom = web_previews().with(|all| all.0.get(&doc_id).map(|p| p.custom_url.trim().to_owned()).unwrap_or_default());
+            let target = if !custom.is_empty() {
+                custom
+            } else {
+                let html = rendered_web_html(doc_id);
+                let path = std::env::temp_dir().join(format!("scratchrunner-preview-{doc_id}.html"));
+                if std::fs::write(&path, html).is_err() { return; }
+                scratch_lsp::path_to_uri(&path)
+            };
+            spawn(async move { let _ = open_url(target).await; });
+        }))
+}
+
+fn web_inspector_drawer(doc_id: DocumentId, web_ref: ElementRef, js_draft: Signal<String>) -> impl IntoElement {
+    when(move || web_previews().with(|all| all.0.get(&doc_id).is_some_and(|p| p.inspector_open)), move || {
+        let r_eval = web_ref.clone();
+        view().h(px(148.0)).flex_shrink(0.0).flex_col().border_t_1().border_color(tokens::border).bg(tokens::console_bg)
+            .child(view().h(px(24.0)).flex_shrink(0.0).flex_row().items_center().justify_between().px_2()
+                .border_b_1().border_color(tokens::editor_bar_border).bg(tokens::editor_bar)
+                .child(type_caption().medium().apply(text(move || {
+                    let count = web_previews().with(|all| all.0.get(&doc_id).map(|p| p.logs.len()).unwrap_or(0));
+                    format!("JS Console ({count})")
+                })).text_color(tokens::muted_foreground))
+                .child(button("Clear", ButtonOptions::new().variant(ButtonVariant::Ghost).size(ControlSize::Sm), move || {
+                    update_preview(doc_id, |p| p.logs.clear());
+                })))
+            .child(scroll().flex_1().min_h(px(0.0)).px_2().py_1().child(dynamic(move || {
+                let logs = web_previews().with(|all| all.0.get(&doc_id).map(|p| p.logs.clone()).unwrap_or_default());
+                if logs.is_empty() {
+                    return type_caption().apply(text("No console messages yet. Right-click preview for Inspect Element.")).text_color(tokens::muted_foreground).into_element();
+                }
+                view().flex_col().gap_0p5().children(logs.into_iter().map(|(lv, msg)| {
+                    let fg = match lv.as_str() {
+                        "error" => tokens::destructive(),
+                        "warn" => tokens::warning(),
+                        "eval" => tokens::primary(),
+                        _ => tokens::console_fg(),
+                    };
+                    let prefix = match lv.as_str() {
+                        "eval" => "> ",
+                        "error" => "✕ ",
+                        "warn" => "▲ ",
+                        _ => "  ",
+                    };
+                    text(format!("{prefix}{msg}"))
+                        .text_xs()
+                        .font_family(scratch_ui_kit::typography::CODE_FONT_STACK)
+                        .text_color(fg)
+                        .select_text()
+                })).into_element()
+            })))
+            .child(
+                input()
+                    .value(move || js_draft.get())
+                    .placeholder("> Evaluate JavaScript in preview…")
+                    .placeholder_color(|| color(tokens::muted_foreground()))
+                    .caret_color(|| color(tokens::primary()))
+                    .on_change(move |v: &str| js_draft.set(v.to_owned()))
+                    .on_submit(move |code: &str| {
+                        let trimmed = code.trim();
+                        if trimmed.is_empty() { return; }
+                        push_web_log(doc_id, "eval".into(), trimmed.to_owned());
+                        let quoted = serde_json::to_string(trimmed).unwrap_or_else(|_| "\"\"".to_owned());
+                        let js = format!(
+                            "try {{ var __v = (0, eval)({quoted}); if (__v !== undefined) console.log(__v); }} catch (e) {{ console.error(String(e)); }}"
+                        );
+                        r_eval.inject_java_script(js);
+                        js_draft.set(String::new());
+                    })
+                    .h(px(24.0)).px_2().text_xs()
+                    .font_family(scratch_ui_kit::typography::CODE_FONT_STACK)
+                    .border_t_1().border_color(tokens::border)
+                    .bg(tokens::console_bg).text_color(tokens::console_fg),
+            )
+    })
 }
 
 /// The host page a `Web Resource` fragment is injected into.
@@ -797,5 +1333,26 @@ mod tests {
         // Switching documents never reuses another console's scan.
         index.maintain(&console, b, OutputFilter::All, "");
         assert_eq!(index.scanned, 1);
+    }
+
+    #[test]
+    fn custom_url_predicate_and_commit_clear_error() {
+        let mut preview = WebPreviewState {
+            editing_url: true,
+            url_draft: "  http://localhost:3000  ".to_owned(),
+            error: Some("stale error".to_owned()),
+            ..WebPreviewState::default()
+        };
+        assert!(!has_custom_preview_url(&preview));
+        preview.logs.push(("log".to_owned(), "hello".to_owned()));
+        preview.loading = true;
+        assert!(!has_custom_preview_url(&preview));
+
+        let url = preview.url_draft.clone();
+        commit_custom_url(&mut preview, &url);
+        assert!(has_custom_preview_url(&preview));
+        assert_eq!(preview.custom_url, "http://localhost:3000");
+        assert!(!preview.editing_url);
+        assert_eq!(preview.error, None);
     }
 }

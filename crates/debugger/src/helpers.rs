@@ -33,10 +33,26 @@ pub(crate) fn python_helper(name: &str) -> Option<(&'static str, &'static str)> 
     }
 }
 
+pub(crate) const GDB_INIT: &str = r#"set confirm off
+set startup-with-shell off
+set height 0
+set width 0
+set filename-display absolute
+define hook-stop
+  frame
+end
+define cr_vars
+  info args
+  echo -\n
+  info locals
+end
+"#;
+
 /// The contents of a named startup file.
 pub(crate) fn init_file(name: &str) -> Option<&'static str> {
     match name {
         "lldb" => Some(LLDB_INIT),
+        "gdb" => Some(GDB_INIT),
         _ => None,
     }
 }

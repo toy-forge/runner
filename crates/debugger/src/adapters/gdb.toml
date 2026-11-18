@@ -1,0 +1,62 @@
+# GDB: GNU Debugger for C, C++, Objective-C, Go and Rust.
+#
+# LLDB is the default on macOS; GDB can be chosen explicitly in language
+# debugger settings or used when installed (e.g. via Homebrew or cross-toolchains).
+id = "gdb"
+name = "GDB"
+languages = ["c", "cpp", "objective-c", "objective-cpp", "go", "rust"]
+prompt = '(?m)\(gdb\) $'
+termination = '(?i)exited (?:normally|with code (\d+))|program terminated with signal'
+crash = '(?m)^Program received signal '
+message = '(?m)^(?:Program received signal|Hardware watchpoint|Watchpoint \d+:|(?:Old|New) value = )'
+ignore = '^\s*$|^warning: GDB: Failed to set controlling terminal'
+install_hint = "GDB is not installed. On macOS, use LLDB (default) or install GDB with Homebrew (`brew install gdb`)."
+
+[start]
+program = "gdb"
+args = ["-q", "-x", "{init_file}", "{program}"]
+pty = true
+init = "gdb"
+
+[start.env]
+TERM = "dumb"
+
+[parsers]
+kind = "generic"
+stop_location = '(?m)^(?:#\d+\s+(?:0x[0-9a-fA-F]+\s+in\s+)?|(?:Thread \d+ [^\r\n]*hit )?Breakpoint \d+, )(?<function>[^(\r\n]+)\s*\([^)]*\)\s+at\s+(?<file>[^\r\n:]+):(?<line>\d+)'
+frames = '(?m)^#(?<index>\d+)\s+(?:0x[0-9a-fA-F]+\s+in\s+)?(?<function>[^\r\n]+?)\s*(?:\([^)]*\))?\s+at\s+(?<file>[^\r\n:]+):(?<line>\d+)$'
+breakpoint_set = '(?m)^Breakpoint (?<id>\d+)'
+breakpoint_hit = '(?m)^(?:Thread \d+ .*)?(?:hit )?Breakpoint (?<id>\d+)'
+variables = '(?m)^(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>[^\r\n]*)$'
+
+[options]
+prompt_means_paused = true
+requires_paused_commands = true
+program_tty = true
+supports_pause = true
+pause_with_signal = true
+echo = "line"
+default_depth = 2
+max_children = 100
+setup_commands = ["set tty {program_tty}"]
+
+[commands]
+launch = "run {quoted_args}"
+continue = "continue"
+step_over = "next"
+step_in = "step"
+step_out = "finish"
+breakpoint_set = "break \"{file_base}\":{line}{condition_clause}{temporary_clause}"
+condition_clause = " if {condition}"
+temporary_clause = ""
+breakpoint_clear = "clear \"{file_base}\":{line}"
+breakpoint_clear_all = "delete breakpoints"
+breakpoint_list = "info breakpoints"
+backtrace = "thread apply all backtrace"
+frame_up = "up {count}"
+frame_down = "down {count}"
+select_frame = "thread {thread}\nframe {frame}"
+variables = "cr_vars"
+evaluate = "print {expr}"
+set_variable = "set var {path} = {value}"
+quit = "quit"

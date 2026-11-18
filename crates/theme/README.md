@@ -7,7 +7,7 @@ dependency (no `nsh-*`): `cargo test -p scratch-theme` runs in seconds.
   items, `gutterSettings`, `findHighlight`, ...). Parse (`from_plist`), write
   (`to_plist_xml`), import legacy `.crTheme` (`from_cr_theme`), `inverted`,
   `duplicate`, `is_dark`, `editor_colors()`, `chrome()`.
-* `ThemeLibrary` - 11 built-in themes + user directory; new / duplicate /
+* `ThemeLibrary` - 15 built-in themes + user directory; new / duplicate /
   rename / invert / delete (= reset for built-ins) / import / export.
 * `ScopeSelector` - TextMate selectors with CodeRunner's extensions
   (`( ) , | & - > * ** $ =`), scored for specificity.

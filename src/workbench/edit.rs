@@ -10,16 +10,17 @@
 //! (moving lines is the text changing, not a view moving), and the font size
 //! relayouts the editor; menus are native.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::rc::Rc;
 
 use nsh_base::editor::EditorEdit;
-use nsh_base::{EditorApi, EditorCommand, EditorPosition, EditorRange, EditorSelection};
+use nsh_base::{EditorApi, EditorCommand, EditorPosition, EditorRange, EditorSelection, input};
 use nsh_core::element::desktop::MenuItem;
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 use scratch_config::Preferences;
 use scratch_language::{MenuEntry, MenuOrder, PLAIN_TEXT_ID};
+use scratch_ui_kit::{prelude::*, tokens};
 
 use super::{bindings, preferences, state};
 
@@ -42,7 +43,6 @@ pub fn install() {
         // compound-command dispatch without binding.
         bindings::register("text.shiftRight", || run(EditorCommand::Indent));
         bindings::register("text.shiftLeft", || run(EditorCommand::Outdent));
-        bindings::register("window.selectTab10", || state::activate_tab(9));
         // A second way to type Bigger (Shift is often held for `+`).
         on_key_with("mod+shift+plus", KeyOptions { when: When::Always, repeat: true, ..KeyOptions::default() }, |_| zoom(1.0));
     });
@@ -60,6 +60,7 @@ const KEYS: &[(&str, fn(), bool)] = &[
     ("text.selectLine", || run(EditorCommand::SelectLine), true),
     ("text.font.bigger", || zoom(1.0), true),
     ("text.font.smaller", || zoom(-1.0), true),
+    ("text.showFonts", show_fonts, false),
     ("sr.actualSize", reset_zoom, false),
     ("text.options.showInvisibles", || toggle(Display::Invisibles), false),
     ("text.options.pageGuide", || toggle(Display::PageGuide), false),
@@ -80,6 +81,8 @@ const KEYS: &[(&str, fn(), bool)] = &[
     ("text.selectToDelimitersRight", || select_to_delimiters(Delimiters::Right), false),
     ("text.selectToDelimitersLeft", || select_to_delimiters(Delimiters::Left), false),
     ("text.insertSelectionNumber", insert_selection_number, false),
+    ("edit.killToLineEnd", kill_to_line_end, false),
+    ("edit.yank", yank, true),
 ];
 
 /// The Text menu's items.
@@ -95,6 +98,10 @@ pub fn menu_items() -> Vec<MenuItem> {
     };
     vec![
         item("Show Completions", "text.showCompletions", || run(EditorCommand::ShowCompletions)),
+        item("Go to Definition", "lsp.goToDefinition", super::lsp::go_to_definition),
+        item("Show Signature Help", "lsp.signatureHelp", super::lsp::signature_help),
+        item("Rename Symbol…", "lsp.rename", super::lsp::rename_symbol),
+        item("Format Document", "lsp.formatDocument", super::lsp::format_document),
         item("Look Up Current Symbol", "text.lookupSymbol", super::docs::look_up_current_symbol),
         MenuItem::separator(),
         item("Auto-Indent Selection", "text.autoIndentSelection", auto_indent_selection),
@@ -127,6 +134,8 @@ pub fn menu_items() -> Vec<MenuItem> {
                 surround_item("Parentheses", "text.surround.parentheses", "(", ")"),
                 surround_item("Braces", "text.surround.braces", "{", "}"),
                 surround_item("Brackets", "text.surround.brackets", "[", "]"),
+                MenuItem::separator(),
+                item("Custom…", "text.surround.custom", open_custom_surround),
             ]
         }),
         MenuItem::separator(),
@@ -195,7 +204,8 @@ pub(super) fn language_items() -> Vec<MenuItem> {
         };
         // `None` is the plain-text document, as CodeRunner's language menu has it.
         let mut items = vec![item(PLAIN_TEXT_ID, "None"), MenuItem::separator()];
-        for entry in workspace.registry.as_ref().map(|registry| registry.menu_entries(true, MenuOrder::Alphabetical)).unwrap_or_default() {
+        let group = super::preferences::settings().with_untracked(|p| p.advanced.group_languages);
+        for entry in workspace.registry.as_ref().map(|registry| registry.menu_entries(group, MenuOrder::Alphabetical)).unwrap_or_default() {
             match entry {
                 MenuEntry::Language(def) => {
                     // Plain Text's slot is `None`, above the separator.
@@ -508,15 +518,111 @@ fn encoding_items() -> Vec<MenuItem> {
 
 /// "Surround Selection With": inserts `left`/`right` around every selection.
 pub fn surround(left: &'static str, right: &'static str) {
+    surround_strings(left, right);
+}
+
+fn surround_strings(left: &str, right: &str) {
     let Some(api) = active_api() else { return; };
     let mut edits: Vec<EditorEdit> = Vec::new();
     for selection in api.selections() {
         let (start, end) = ordered(selection.anchor, selection.head);
-        edits.push(EditorEdit::new(EditorRange::new(end, end), right));
-        edits.push(EditorEdit::new(EditorRange::new(start, start), left));
+        edits.push(EditorEdit::new(EditorRange::new(end, end), right.to_owned()));
+        edits.push(EditorEdit::new(EditorRange::new(start, start), left.to_owned()));
     }
     edits.sort_by_key(|a| std::cmp::Reverse((a.range.start.line, a.range.start.column)));
     api.edit(edits);
+}
+
+#[derive(Clone, PartialEq)]
+struct CustomSurroundSheet {
+    open: bool,
+    left: String,
+    right: String,
+}
+
+impl Default for CustomSurroundSheet {
+    fn default() -> Self {
+        Self { open: false, left: "(".into(), right: ")".into() }
+    }
+}
+
+fn open_custom_surround() {
+    global::<CustomSurroundSheet>().update(|s| s.open = true);
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct KillRing(VecDeque<String>);
+
+/// Emacs `⌃K`: kills from caret to the end of the line (or joins with the next
+/// line when already at end of line) onto the bounded kill ring.
+pub(super) fn kill_to_line_end() {
+    let Some(api) = active_api() else { return; };
+    let text = api.value();
+    let lines: Vec<&str> = text.split('\n').collect();
+    let selections = api.selections();
+    let Some(primary) = selections.last() else { return; };
+    let (mut start, mut end) = ordered(primary.anchor, primary.head);
+    if start == end {
+        let line_idx = start.line as usize;
+        let line = lines.get(line_idx).copied().unwrap_or("").strip_suffix('\r').unwrap_or(lines.get(line_idx).copied().unwrap_or(""));
+        let line_cols = line.encode_utf16().count() as u32;
+        if start.column < line_cols {
+            end = EditorPosition::new(start.line, line_cols);
+        } else if line_idx + 1 < lines.len() {
+            end = EditorPosition::new(start.line + 1, 0);
+        } else {
+            return;
+        }
+    }
+    let killed = extract_utf16_range(&lines, start, end);
+    if killed.is_empty() { return; }
+    let cap = preferences::settings()
+        .with_untracked(|p| p.text_editing.behavior.kill_ring_size.max(1) as usize);
+    global::<KillRing>().update(|ring| {
+        ring.0.push_front(killed.clone());
+        ring.0.truncate(cap);
+    });
+    set_clipboard(killed);
+    api.edit(vec![EditorEdit::new(EditorRange::new(start, end), "")]);
+    start = ordered(start, end).0;
+    api.set_selections(vec![EditorSelection::new(start, start)]);
+}
+
+/// Emacs `⌃Y`: inserts the most recently killed string from the kill ring.
+pub(super) fn yank() {
+    let Some(text) = global::<KillRing>().with_untracked(|ring| ring.0.front().cloned()) else {
+        return;
+    };
+    let Some(api) = active_api() else { return; };
+    let mut edits: Vec<EditorEdit> = api
+        .selections()
+        .iter()
+        .map(|sel| {
+            let (start, end) = ordered(sel.anchor, sel.head);
+            EditorEdit::new(EditorRange::new(start, end), text.clone())
+        })
+        .collect();
+    edits.sort_by_key(|a| std::cmp::Reverse((a.range.start.line, a.range.start.column)));
+    api.edit(edits);
+}
+
+fn extract_utf16_range(lines: &[&str], start: EditorPosition, end: EditorPosition) -> String {
+    let mut out = String::new();
+    let first = (start.line as usize).min(lines.len().saturating_sub(1));
+    let last = (end.line as usize).min(lines.len().saturating_sub(1)).max(first);
+    for (idx, raw) in lines.iter().enumerate().take(last + 1).skip(first) {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        let units: Vec<u16> = line.encode_utf16().collect();
+        let lo = if idx == first { (start.column as usize).min(units.len()) } else { 0 };
+        let hi = if idx == last { (end.column as usize).min(units.len()) } else { units.len() };
+        if lo < hi {
+            out.push_str(&String::from_utf16_lossy(&units[lo..hi]));
+        }
+        if idx < last {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// "Insert Selection Number": every selection is replaced by its 1-based
@@ -557,6 +663,14 @@ pub(super) fn copy_with_colors() {
 
 /// The editor's right-click menu (CodeRunner's): clipboard and case
 /// transforms over the selection, completions, spelling and speech.
+/// The editor's context menu, including breakpoint controls for `line`.
+pub(super) fn context_menu_for(id: scratch_document::DocumentId, line: u32) -> Vec<MenuItem> {
+    let mut items = context_menu();
+    items.push(MenuItem::separator());
+    items.extend(super::debugger::gutter_context_menu(id, line));
+    items
+}
+
 pub(super) fn context_menu() -> Vec<MenuItem> {
     vec![
         MenuItem::new("Cut").on_select(|| run(EditorCommand::Cut)),
@@ -567,6 +681,9 @@ pub(super) fn context_menu() -> Vec<MenuItem> {
         MenuItem::new("Delete").on_select(|| run(EditorCommand::DeleteForward)),
         MenuItem::new("Select All").on_select(|| run(EditorCommand::SelectAll)),
         MenuItem::separator(),
+        MenuItem::new("Go to Definition").on_select(super::lsp::go_to_definition),
+        MenuItem::new("Rename Symbol…").on_select(super::lsp::rename_symbol),
+        MenuItem::new("Format Document").on_select(super::lsp::format_document),
         MenuItem::new("Show Completions").on_select(|| run(EditorCommand::ShowCompletions)),
         MenuItem::separator(),
         MenuItem::submenu("Transformations", [
@@ -595,8 +712,32 @@ pub(super) fn start_speaking() {
     }
 }
 
-/// Text > Show Color Scopes: the syntax scope stack and the theme items
-/// matching at the caret, as CodeRunner's HUD lists them.
+#[derive(Clone, Default, PartialEq)]
+struct ColorScopesSheet {
+    open: bool,
+    line: u32,
+    column: u32,
+    fg_hex: String,
+    fg_rgba: (u8, u8, u8, u8),
+    bg_hex: Option<String>,
+    bg_rgba: Option<(u8, u8, u8, u8)>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    stack: Vec<String>,
+    matched: Vec<(String, String)>,
+}
+
+fn hex_rgba(c: scratch_theme::Rgba) -> String {
+    if c.a == u8::MAX {
+        format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
+    } else {
+        format!("#{:02X}{:02X}{:02X}{:02X}", c.r, c.g, c.b, c.a)
+    }
+}
+
+/// Text > Show Color Scopes: the syntax scope stack, resolved colors and theme
+/// rules matching at the caret (⌃⌘P).
 pub fn show_color_scopes() {
     let Some(id) = state::with(|workspace| workspace.active) else { return };
     let Some(api) = state::editor_api(id) else { return };
@@ -605,28 +746,146 @@ pub fn show_color_scopes() {
         state::notice("No color scopes at the caret.");
         return;
     };
-    let stack = info.stack.join("\n");
+    let fg = info.style.foreground;
+    let bg = info.style.background;
     let matched = info
         .matched
         .iter()
-        .take(6)
-        .map(|item| {
-            format!(
-                "{}  ·  {}",
-                item.name.clone().unwrap_or_else(|| "(unnamed)".into()),
-                item.scope
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    spawn(async move {
-        let _ = nsh_base::alert_dialog()
-            .title("Color Scopes")
-            .description(format!("Scope stack:\n{stack}\n\nTheme matches:\n{matched}"))
-            .action("ok", "OK")
-            .show()
-            .await;
+        .take(10)
+        .map(|item| (item.name.clone().unwrap_or_else(|| "(unnamed)".into()), item.scope.clone()))
+        .collect();
+    global::<ColorScopesSheet>().set(ColorScopesSheet {
+        open: true,
+        line: head.line + 1,
+        column: head.column + 1,
+        fg_hex: hex_rgba(fg),
+        fg_rgba: (fg.r, fg.g, fg.b, fg.a),
+        bg_hex: bg.map(hex_rgba),
+        bg_rgba: bg.map(|c| (c.r, c.g, c.b, c.a)),
+        bold: info.style.bold,
+        italic: info.style.italic,
+        underline: info.style.underline,
+        stack: info.stack,
+        matched,
     });
+}
+
+/// Modal sheets owned by the edit module (Custom Surround & Color Scopes).
+pub fn overlay() -> impl IntoElement {
+    view()
+        .child(when(move || global::<CustomSurroundSheet>().with(|s| s.open), custom_surround_sheet))
+        .child(when(move || global::<ColorScopesSheet>().with(|s| s.open), color_scopes_sheet))
+}
+
+fn custom_surround_sheet() -> impl IntoElement {
+    let sheet = global::<CustomSurroundSheet>();
+    let close = || global::<CustomSurroundSheet>().update(|s| s.open = false);
+    let apply = move || {
+        let (left, right) = sheet.with_untracked(|s| (s.left.clone(), s.right.clone()));
+        global::<CustomSurroundSheet>().update(|s| s.open = false);
+        surround_strings(&left, &right);
+    };
+    nsh_core::prelude::overlay()
+        .inset_0()
+        .child(view().absolute().inset_0().bg(tokens::scrim).on_press(close))
+        .child(view().flex_1().items_center().pt(px(48.0)).child(
+            view()
+                .w(px(360.0))
+                .p(px(18.0))
+                .gap(px(12.0))
+                .rounded(px(tokens::radius_xl()))
+                .bg(tokens::background)
+                .border_1()
+                .border_color(tokens::border)
+                .shadow_lg()
+                .shadow_color(tokens::shadow())
+                .child(type_subhead().semibold().apply(text("Custom Surround")).text_color(tokens::foreground))
+                .child(type_caption().apply(text("Enter prefix and suffix strings to wrap each selection.")).text_color(tokens::muted_foreground))
+                .child(view().flex_row().gap(px(8.0))
+                    .child(view().flex_1().gap(px(4.0))
+                        .child(type_caption().apply(text("Prefix")).text_color(tokens::muted_foreground))
+                        .child(input().value(move || sheet.with(|s| s.left.clone())).auto_focus(true)
+                            .on_change(move |v: &str| sheet.update(|s| s.left = v.to_owned()))
+                            .on_submit(move |_: &str| apply())
+                            .h(px(28.0)).px_2().text_sm()
+                            .font_family(scratch_ui_kit::typography::CODE_FONT_STACK)
+                            .bg(tokens::field).text_color(tokens::foreground)
+                            .border_1().border_color(tokens::input).rounded(px(tokens::radius()))))
+                    .child(view().flex_1().gap(px(4.0))
+                        .child(type_caption().apply(text("Suffix")).text_color(tokens::muted_foreground))
+                        .child(input().value(move || sheet.with(|s| s.right.clone()))
+                            .on_change(move |v: &str| sheet.update(|s| s.right = v.to_owned()))
+                            .on_submit(move |_: &str| apply())
+                            .h(px(28.0)).px_2().text_sm()
+                            .font_family(scratch_ui_kit::typography::CODE_FONT_STACK)
+                            .bg(tokens::field).text_color(tokens::foreground)
+                            .border_1().border_color(tokens::input).rounded(px(tokens::radius())))))
+                .child(view().flex_row().justify_end().gap(px(8.0)).pt(px(4.0))
+                    .child(button("Cancel", ButtonOptions::new().variant(ButtonVariant::Default).size(ControlSize::Sm), close))
+                    .child(button("Surround", ButtonOptions::new().variant(ButtonVariant::Primary).size(ControlSize::Sm), apply))),
+        ))
+}
+
+fn color_scopes_sheet() -> impl IntoElement {
+    let sheet = global::<ColorScopesSheet>();
+    let close = || global::<ColorScopesSheet>().update(|s| s.open = false);
+    let data = sheet.with(|s| s.clone());
+    let fg_swatch = nsh_core::Color::rgba(data.fg_rgba.0, data.fg_rgba.1, data.fg_rgba.2, data.fg_rgba.3);
+    let mut style_flags = Vec::new();
+    if data.bold { style_flags.push("Bold"); }
+    if data.italic { style_flags.push("Italic"); }
+    if data.underline { style_flags.push("Underline"); }
+    let flags_label = if style_flags.is_empty() { "Normal".to_owned() } else { style_flags.join(", ") };
+
+    nsh_core::prelude::overlay()
+        .inset_0()
+        .child(view().absolute().inset_0().bg(tokens::scrim).on_press(close))
+        .child(view().flex_1().items_center().pt(px(44.0)).child(
+            view()
+                .w(px(460.0))
+                .p(px(18.0))
+                .gap(px(10.0))
+                .rounded(px(tokens::radius_xl()))
+                .bg(tokens::background)
+                .border_1()
+                .border_color(tokens::border)
+                .shadow_lg()
+                .shadow_color(tokens::shadow())
+                .child(view().flex_row().items_center().justify_between()
+                    .child(type_subhead().semibold().apply(text("Color Scopes")).text_color(tokens::foreground))
+                    .child(type_caption().apply(text(format!("Line {}, Col {}", data.line, data.column))).tabular_nums().text_color(tokens::muted_foreground)))
+                .child(view().p(px(10.0)).gap(px(6.0)).rounded(px(tokens::radius_lg())).bg(tokens::card).border_1().border_color(tokens::border)
+                    .child(view().flex_row().items_center().gap(px(8.0))
+                        .child(view().w(px(14.0)).h(px(14.0)).rounded(px(3.0)).border_1().border_color(tokens::border).bg(fg_swatch))
+                        .child(type_body().apply(text(format!("Foreground {}", data.fg_hex))).text_color(tokens::foreground))
+                        .child(view().flex_1())
+                        .child(type_caption().apply(text(flags_label)).text_color(tokens::muted_foreground)))
+                    .child(when({ let has_bg = data.bg_hex.is_some(); move || has_bg }, {
+                        let bg_hex = data.bg_hex.clone().unwrap_or_default();
+                        let bg_c = data.bg_rgba.unwrap_or((0, 0, 0, 255));
+                        let bg_swatch = nsh_core::Color::rgba(bg_c.0, bg_c.1, bg_c.2, bg_c.3);
+                        move || view().flex_row().items_center().gap(px(8.0))
+                            .child(view().w(px(14.0)).h(px(14.0)).rounded(px(3.0)).border_1().border_color(tokens::border).bg(bg_swatch))
+                            .child(type_body().apply(text(format!("Background {}", bg_hex.clone()))).text_color(tokens::foreground))
+                    })))
+                .child(type_caption().medium().apply(text("Scope Stack")).text_color(tokens::muted_foreground))
+                .child(view().p(px(8.0)).rounded(px(tokens::radius())).bg(tokens::muted).border_1().border_color(tokens::border)
+                    .child(type_code_caption().apply(text(if data.stack.is_empty() { "(none)".to_owned() } else { data.stack.join("\n") })).select_text().text_color(tokens::foreground)))
+                .child(type_caption().medium().apply(text("Matched Theme Rules")).text_color(tokens::muted_foreground))
+                .child(view().p(px(8.0)).gap(px(4.0)).rounded(px(tokens::radius())).bg(tokens::muted).border_1().border_color(tokens::border)
+                    .children(if data.matched.is_empty() {
+                        vec![type_caption().apply(text("(default theme text)")).text_color(tokens::muted_foreground).into_element()]
+                    } else {
+                        data.matched.into_iter().map(|(name, scope)| {
+                            view().flex_row().items_center().justify_between().gap(px(8.0))
+                                .child(type_caption().medium().apply(text(name)).text_color(tokens::foreground))
+                                .child(type_code_caption().apply(text(scope)).text_color(tokens::muted_foreground))
+                                .into_element()
+                        }).collect()
+                    }))
+                .child(view().flex_row().justify_end().pt(px(2.0))
+                    .child(button("Done", ButtonOptions::new().variant(ButtonVariant::Primary).size(ControlSize::Sm), close))),
+        ))
 }
 
 /// An editor display option of the Editor Options menu.
